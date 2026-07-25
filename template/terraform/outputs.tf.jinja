@@ -1,0 +1,9 @@
+output "lambda_function_url" {
+  value = module.app.lambda_function_url
+}
+{% if needs_datastore %}
+
+output "table_name" {
+  value = module.table.table_name
+}
+{% endif %}

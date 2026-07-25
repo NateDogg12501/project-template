@@ -1,0 +1,57 @@
+_subdirectory: template
+_min_copier_version: "9.0.0"
+
+_envops:
+  trim_blocks: true
+  lstrip_blocks: true
+
+_tasks:
+  - command: "git init"
+    when: "{{ _copier_operation == 'copy' }}"
+  - command: "rm -rf terraform"
+    when: "{{ _copier_operation == 'copy' and not needs_hosting }}"
+  - command: "rm -f docs/mock-vs-real.md"
+    when: "{{ _copier_operation == 'copy' and flavor != 'demo' }}"
+  - command: "git add -A"
+    when: "{{ _copier_operation == 'copy' }}"
+  - command: >-
+      git commit --quiet -m "Scaffold from project-template (flavor: {{ flavor }})"
+    when: "{{ _copier_operation == 'copy' }}"
+
+project_name:
+  type: str
+  help: "Project name (human-readable, e.g. \"Recipe Box\")"
+
+project_slug:
+  type: str
+  help: "Lowercase, hyphenated slug — used for the Lambda function name, DynamoDB table prefix, package.json name"
+  default: "{{ project_name | lower | replace(' ', '-') }}"
+
+description:
+  type: str
+  help: "One sentence: what this project is (goes into README.md and CLAUDE.md)"
+
+flavor:
+  type: str
+  help: "Which extended pipeline to layer on top of core — see STANDARDS.md in this template repo for what each one means"
+  choices:
+    - core
+    - demo
+    - personal
+  default: core
+
+needs_hosting:
+  type: bool
+  help: "Deployed to AWS (Lambda, Always Free tier) as well as local-only?"
+  default: true
+
+needs_datastore:
+  type: bool
+  help: "Needs a database (DynamoDB via the shared terraform-modules dynamodb-single-table module)?"
+  default: false
+  when: "{{ needs_hosting }}"
+
+author_name:
+  type: str
+  help: "Your name, for README.md / LICENSE"
+  default: "Nathan Schlechte"
