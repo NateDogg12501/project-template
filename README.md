@@ -20,7 +20,7 @@ Free, open source (MIT), fully local — no account or service required.
 ```bash
 copier copy . ../my-new-project
 # or, once this repo has a remote:
-copier copy gh:<you>/project-template ../my-new-project
+copier copy gh:NateDogg12501/project-template ../my-new-project
 ```
 
 You'll be asked for `project_name`, `description`, `flavor`

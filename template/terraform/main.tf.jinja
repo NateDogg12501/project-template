@@ -13,7 +13,7 @@ provider "aws" {
 }
 
 module "app" {
-  source = "git::https://github.com/<you>/terraform-modules.git//modules/lambda-web-app?ref=v1.0.0"
+  source = "git::https://github.com/NateDogg12501/terraform-modules.git//modules/lambda-web-app?ref=v1.0.0"
 
   app_name   = "{{ project_slug }}"
   aws_region = var.aws_region
@@ -33,7 +33,7 @@ module "app" {
 {% if needs_datastore %}
 
 module "table" {
-  source = "git::https://github.com/<you>/terraform-modules.git//modules/dynamodb-single-table?ref=v1.0.0"
+  source = "git::https://github.com/NateDogg12501/terraform-modules.git//modules/dynamodb-single-table?ref=v1.0.0"
 
   table_name = "{{ project_slug }}-items"
   hash_key   = "id"
