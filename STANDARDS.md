@@ -7,6 +7,8 @@ it. Update it here; existing projects pick up the *spirit* of a change
 manually (this file isn't re-applied by `copier update` — only the
 templated files under `template/` are).
 
+## Update-flow test marker (remove after verifying `copier update` works)
+
 ## Hosting
 
 - AWS Always Free services only. If a design needs something outside the
