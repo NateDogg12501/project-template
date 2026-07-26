@@ -20,24 +20,30 @@ _tasks:
 
 project_name:
   type: str
-  help: "Project name (human-readable, e.g. \"Recipe Box\")"
+  help: "Project name (human-readable)"
+  placeholder: "Recipe Box"
 
 project_slug:
   type: str
   help: "Lowercase, hyphenated slug — used for the Lambda function name, DynamoDB table prefix, package.json name"
+  placeholder: "recipe-box"
   default: "{{ project_name | lower | replace(' ', '-') }}"
 
 description:
   type: str
   help: "One sentence: what this project is (goes into README.md and CLAUDE.md)"
+  placeholder: "A small app for saving and tagging recipes"
 
 flavor:
   type: str
-  help: "Which extended pipeline to layer on top of core — see STANDARDS.md in this template repo for what each one means"
+  help: "Which extended pipeline to layer on top of core — see STANDARDS.md's Flavors section"
   choices:
     - core
     - demo
-    - personal
+    # "personal" is intentionally not offered yet — see STANDARDS.md's
+    # Flavors section and docs/decisions.md. Add it back here once its
+    # content actually exists; don't offer a choice that currently changes
+    # nothing.
   default: core
 
 needs_hosting:

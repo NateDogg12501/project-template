@@ -7,6 +7,17 @@ it. Update it here; existing projects pick up the *spirit* of a change
 manually (this file isn't re-applied by `copier update` — only the
 templated files under `template/` are).
 
+## How standards get added
+
+Every standard or tool this pipeline adopts — not just the ones already
+below — gets an entry in [`docs/decisions.md`](docs/decisions.md) **in this
+repo**, explaining what was chosen, why, and why not the alternative. That's
+separate from the *generated-project* decisions log downstream projects get
+(`template/docs/decisions.md.jinja`) — this repo, being the thing every
+project inherits from, holds itself to the same discipline it asks of them.
+See `docs/decisions.md` for the reasoning behind Copier, this file's own
+existence as a separate un-templated file, and the flavor choices below.
+
 ## Hosting
 
 - AWS Always Free services only. If a design needs something outside the
@@ -78,9 +89,16 @@ Source switch in the UI and a normalization layer in the backend so both
 paths render identically to the frontend.
 
 ### `personal`
-**Not yet defined.** A placeholder in `copier.yml` today (choosing it
-changes nothing beyond the flavor name recorded in `CLAUDE.md`). Fill this
-in once there's a real personal project to generalize from, the same way
-`demo` was generalized from MokapiExample rather than designed in the
-abstract — don't guess at "personal project conventions" ahead of having
-one.
+**Not yet defined, and not currently selectable** — removed from
+`copier.yml`'s `flavor` choices (see `docs/decisions.md`) rather than left
+as an option that silently does nothing.
+
+What "don't guess at personal project conventions ahead of having one"
+means concretely: `demo` wasn't designed by imagining what a demo project
+might need in the abstract — it was written down *after* MokapiExample
+already existed, by generalizing the pattern that project actually used
+(mock/real toggle, normalization layer). `personal` should get the same
+treatment: build a real personal project first, notice what makes it
+different from `core` or `demo` in practice, then write *that* down here
+and add it back to `copier.yml` — not invent plausible-sounding rules now
+that might not match whatever a real personal project turns out to need.
