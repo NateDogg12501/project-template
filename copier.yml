@@ -17,6 +17,9 @@ _tasks:
   - command: >-
       git commit --quiet -m "Scaffold from project-template (flavor: {{ flavor }})"
     when: "{{ _copier_operation == 'copy' }}"
+  - command: >-
+      gh repo create {{ project_slug }} --private --source=. --remote=origin --push
+    when: "{{ _copier_operation == 'copy' }}"
 
 project_name:
   type: str

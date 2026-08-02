@@ -45,7 +45,10 @@ the questions asked and the output are identical either way.)
 You'll be asked for `project_name`, `description`, `flavor` (`core`/`demo`
 — see STANDARDS.md's Flavors section for why `personal` isn't offered yet),
 and whether it needs hosting/a datastore. The generated repo is `git
-init`'d and given a first commit automatically.
+init`'d, given a first commit, and pushed to a new **private** GitHub repo
+(named after `project_slug`) under your authenticated `gh` account —
+automatically. Requires the [GitHub CLI](https://cli.github.com/) (`gh`)
+installed and authenticated (`gh auth login`) before you run `copier copy`.
 
 ## Pull template updates into an already-generated project
 

@@ -84,6 +84,32 @@ inline conditionals in those two files become hard to read, that's the
 concrete signal to switch to per-flavor template composition — not before.
 Revisit this decision then, don't preemptively build the chain.
 
+## 2026-08: Generated projects get a private GitHub repo automatically
+**Context:** the `_tasks` pipeline already ran `git init` + first commit for
+every generated project, but left creating the actual GitHub remote as a
+manual, easy-to-forget step done outside the template — meaning a freshly
+scaffolded project could sit uncommitted-to-GitHub with no record that step
+was skipped.
+**Decision:** added `gh repo create {{ project_slug }} --private --source=.
+--remote=origin --push` as a final `_tasks` entry (copy operations only),
+right after the first commit. Creates the repo under the developer's
+authenticated `gh` account, named after `project_slug`, and pushes the
+initial commit in the same step.
+**Why not leave it manual:** the whole point of this pipeline is removing
+undocumented manual setup steps (see STANDARDS.md's "Structure" section) —
+a repo-creation step that lives only in someone's memory is exactly the kind
+of drift this template exists to prevent.
+**Why `--private` unconditionally:** every project generated so far is
+private by default; nothing in `copier.yml` currently distinguishes
+public-from-private intent, so hardcoding `--private` matches actual usage.
+If a public project is ever needed, that's worth its own question in
+`copier.yml`, not a silent default flip.
+**Consequence:** `copier copy` now hard-depends on the `gh` CLI being
+installed and authenticated (`gh auth login`) — without it, the last task
+fails and the local repo is left committed but not pushed/remoted (everything
+before that task already succeeded, so this is a safe partial failure, not a
+corrupted state). Documented in README's "Generate a new project" section.
+
 ## 2026-07: Minimal Express + static frontend, not npm workspaces/TypeScript
 **Context:** CalculatorExample uses npm workspaces + TypeScript (engine/
 server/web packages) with a real build step; MokapiExample uses a plain
