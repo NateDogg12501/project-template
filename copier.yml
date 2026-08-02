@@ -18,7 +18,7 @@ _tasks:
       git commit --quiet -m "Scaffold from project-template (flavor: {{ flavor }})"
     when: "{{ _copier_operation == 'copy' }}"
   - command: >-
-      gh repo create {{ project_slug }} --private --source=. --remote=origin --push
+      gh repo create {{ (github_owner + '/') if github_owner else '' }}{{ project_slug }} --private --source=. --remote=origin --push
     when: "{{ _copier_operation == 'copy' }}"
 
 project_name:
@@ -64,3 +64,14 @@ author_name:
   type: str
   help: "Your name, for README.md / LICENSE"
   default: "Nathan Schlechte"
+
+github_owner:
+  type: str
+  help: >-
+    Org/user to create the GitHub repo under. Leave blank to let `gh` default
+    to whoever it's authenticated as — the right choice for a human running
+    this interactively. Only needed when the token driving `gh repo create`
+    is scoped to an org (e.g. a fine-grained PAT whose resource owner is an
+    org): `gh repo create <bare-name>` always targets the token's *personal*
+    namespace regardless of scope, which such a token has no permission for.
+  default: ""
