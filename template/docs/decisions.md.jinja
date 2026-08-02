@@ -1,0 +1,20 @@
+# docs/decisions.md
+
+One entry per hard-to-reverse decision, logged when it's made. See
+`CLAUDE.md`'s standing instruction — this file should be updated
+proactively during a session, not reconstructed from memory afterward.
+
+Format per entry:
+
+```markdown
+## YYYY-MM-DD: <short title>
+**Context:** why this needed deciding
+**Decision:** what was chosen
+**Why not the alternative(s):** ...
+**Consequence:** what this commits future work to
+```
+
+## Scaffolding
+**Context:** starting {{ project_name }} from `project-template`.
+**Decision:** flavor = `{{ flavor }}`{% if needs_hosting %}, hosted on AWS Lambda{% if needs_datastore %} with DynamoDB{% endif %}{% else %}, local-only{% endif %}.
+**Why:** {{ description }}

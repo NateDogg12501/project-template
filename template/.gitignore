@@ -1,0 +1,9 @@
+node_modules/
+dist/
+dist-lambda/
+dist-lambda.zip
+.env
+.terraform/
+terraform.tfstate
+terraform.tfstate.backup
+*.tfvars

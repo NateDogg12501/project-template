@@ -1,0 +1,16 @@
+# terraform
+
+Deploys {{ project_name }} to AWS Lambda via the shared
+[`lambda-web-app`](https://github.com/NateDogg12501/terraform-modules/tree/main/modules/lambda-web-app)
+module{% if needs_datastore %} and
+[`dynamodb-single-table`](https://github.com/NateDogg12501/terraform-modules/tree/main/modules/dynamodb-single-table){% endif %}.
+
+## Before first `terraform apply`
+
+1. Build the Lambda artifact: `[fill in your build:lambda command]` — must
+   produce `../dist-lambda/`.
+2. Create every SSM parameter referenced in `main.tf`'s `ssm_secret_env_vars`:
+   ```bash
+   aws ssm put-parameter --name "/{{ project_slug }}/..." --type SecureString --value "..."
+   ```
+3. `terraform init && terraform apply`

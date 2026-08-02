@@ -1,0 +1,48 @@
+# {{ project_name }}
+
+{{ description }}
+
+## Run locally
+
+```bash
+docker compose up -d --build
+```
+
+Then open http://localhost:3000 (or whatever `BACKEND_PORT` resolves to —
+see `.env.example`).
+
+{% if needs_hosting -%}
+## Deployment
+
+Deployed to AWS Lambda (Function URL, no API Gateway/ALB) behind the
+[`lambda-web-app`](https://github.com/NateDogg12501/terraform-modules/tree/main/modules/lambda-web-app)
+Terraform module{% if needs_datastore %}, with data in DynamoDB via
+[`dynamodb-single-table`](https://github.com/NateDogg12501/terraform-modules/tree/main/modules/dynamodb-single-table){% endif %}.
+Stays inside AWS Always Free.
+
+```bash
+cd terraform
+terraform init
+terraform apply
+```
+
+See `terraform/README.md` for required SSM parameters before the first apply.
+{% else -%}
+## Deployment
+
+None — this project is local-only by design (`needs_hosting: false` when
+scaffolded). If that changes, see `project-template`'s `lambda-web-app`
+Terraform module.
+{% endif %}
+
+## Working in a git worktree
+
+Run `node scripts/setup-worktree-env.js` after `git worktree add` — assigns
+this checkout non-colliding ports so it can run alongside another checkout
+of the same repo. See `CLAUDE.md`.
+
+---
+
+Scaffolded from [project-template](https://github.com/NateDogg12501/project-template)
+(flavor: `{{ flavor }}`). Standards this project follows:
+[STANDARDS.md](https://github.com/NateDogg12501/project-template/blob/main/STANDARDS.md).

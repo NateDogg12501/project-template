@@ -1,0 +1,76 @@
+# CLAUDE.md
+
+Internal notes for working on this repo. See [README.md](README.md) for
+user-facing setup/run instructions, and
+[../project-template/STANDARDS.md](https://github.com/NateDogg12501/project-template/blob/main/STANDARDS.md)
+for the rules this project inherits from every project in this pipeline.
+
+Scaffolded from [project-template](https://github.com/NateDogg12501/project-template),
+flavor: `{{ flavor }}`.
+
+## What this is
+
+{{ description }}
+
+[Expand: what stack, local vs hosted story, the one or two things a reader
+most needs to know before touching this repo.]
+
+## Commands
+
+```bash
+docker compose up -d --build   # full app locally
+# [fill in: dev commands, test commands, build commands]
+```
+
+## Architecture invariants
+
+[Things that must stay true — the "if you change X you must also change Y"
+rules. Example shape: "`backend/` is the trust boundary — the frontend's
+validation is convenience only, every write is re-validated server-side."]
+
+## Testing conventions
+
+[What's tested, what's deliberately not yet, how to run each layer. See
+STANDARDS.md — vitest is the default choice across this pipeline.]
+
+## Gotchas
+
+[Bugs/surprises found only by running it, and *why*, so they don't get
+silently "fixed" back in by a future session that lacks this context.]
+
+## Things intentionally left simple
+
+[Scope cuts, each with the reason — so a future session doesn't
+"helpfully" add them back without knowing why they were cut.]
+
+## Extending this
+
+[The 2-3 most likely future changes and where they plug in.]
+{% if flavor == "demo" %}
+
+## Mock/real toggle convention (demo flavor)
+
+See [docs/mock-vs-real.md](docs/mock-vs-real.md) — every external
+integration in a `demo`-flavor project gets a Source switch (mock vs real)
+in the UI, normalized to one response shape in the backend. Follow
+MokapiExample's pattern: the normalization layer is what lets the frontend
+stay ignorant of which source answered.
+{% endif %}
+
+## Decisions log — standing instruction
+
+Whenever you make or observe a hard-to-reverse decision in this repo (a
+real trade-off between alternatives, a scope cut with a non-obvious reason,
+a "why not the more standard approach" call) — **append an entry to
+`docs/decisions.md` before ending the turn, without being asked.** This is
+load-bearing: it's the only reason project decisions survive past the
+session that made them. See STANDARDS.md for why.
+{% if needs_hosting %}
+
+## Working in a git worktree
+
+**Run `node scripts/setup-worktree-env.js` automatically, without being
+asked, whenever you set up a new worktree for this repo.** It assigns
+non-colliding host ports per worktree so multiple checkouts can run
+`docker compose up` concurrently. Idempotent, safe to re-run.
+{% endif %}

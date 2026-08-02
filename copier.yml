@@ -1,0 +1,66 @@
+_subdirectory: template
+_min_copier_version: "9.0.0"
+
+_envops:
+  trim_blocks: true
+  lstrip_blocks: true
+
+_tasks:
+  - command: "git init"
+    when: "{{ _copier_operation == 'copy' }}"
+  - command: "rm -rf terraform"
+    when: "{{ _copier_operation == 'copy' and not needs_hosting }}"
+  - command: "rm -f docs/mock-vs-real.md"
+    when: "{{ _copier_operation == 'copy' and flavor != 'demo' }}"
+  - command: "git add -A"
+    when: "{{ _copier_operation == 'copy' }}"
+  - command: >-
+      git commit --quiet -m "Scaffold from project-template (flavor: {{ flavor }})"
+    when: "{{ _copier_operation == 'copy' }}"
+  - command: >-
+      gh repo create {{ project_slug }} --private --source=. --remote=origin --push
+    when: "{{ _copier_operation == 'copy' }}"
+
+project_name:
+  type: str
+  help: "Project name (human-readable)"
+  placeholder: "Recipe Box"
+
+project_slug:
+  type: str
+  help: "Lowercase, hyphenated slug — used for the Lambda function name, DynamoDB table prefix, package.json name"
+  placeholder: "recipe-box"
+  default: "{{ project_name | lower | replace(' ', '-') }}"
+
+description:
+  type: str
+  help: "One sentence: what this project is (goes into README.md and CLAUDE.md)"
+  placeholder: "A small app for saving and tagging recipes"
+
+flavor:
+  type: str
+  help: "Which extended pipeline to layer on top of core — see STANDARDS.md's Flavors section"
+  choices:
+    - core
+    - demo
+    # "personal" is intentionally not offered yet — see STANDARDS.md's
+    # Flavors section and docs/decisions.md. Add it back here once its
+    # content actually exists; don't offer a choice that currently changes
+    # nothing.
+  default: core
+
+needs_hosting:
+  type: bool
+  help: "Deployed to AWS (Lambda, Always Free tier) as well as local-only?"
+  default: true
+
+needs_datastore:
+  type: bool
+  help: "Needs a database (DynamoDB via the shared terraform-modules dynamodb-single-table module)?"
+  default: false
+  when: "{{ needs_hosting }}"
+
+author_name:
+  type: str
+  help: "Your name, for README.md / LICENSE"
+  default: "Nathan Schlechte"
