@@ -20,7 +20,7 @@ jobs:
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
       - run: npm test --if-present
-{% if needs_hosting -%}
+{% if needs_hosting %}
 
   terraform:
     runs-on: ubuntu-latest
