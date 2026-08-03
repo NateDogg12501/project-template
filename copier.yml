@@ -10,6 +10,11 @@ _tasks:
     when: "{{ _copier_operation == 'copy' }}"
   - command: "rm -rf terraform"
     when: "{{ _copier_operation == 'copy' and not needs_hosting }}"
+  # Only meaningful alongside terraform/ — it builds that module's source_dir.
+  # Whole dir, not just the file: build-lambda.js is currently its only
+  # occupant, and leaving an empty backend/scripts/ behind is just noise.
+  - command: "rm -rf backend/scripts"
+    when: "{{ _copier_operation == 'copy' and not needs_hosting }}"
   - command: "rm -f docs/mock-vs-real.md"
     when: "{{ _copier_operation == 'copy' and flavor != 'demo' }}"
   - command: "git add -A"

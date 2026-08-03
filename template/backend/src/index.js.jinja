@@ -11,7 +11,17 @@ app.get('/api/health', (_req, res) => res.json({ status: 'ok' }))
 // [Extend: mount /api/* routes here — this is the backend/frontend
 // boundary. Keep frontend/ ignorant of anything beyond these responses.]
 
+{% if needs_hosting %}
+// WEB_DIST is set by terraform/main.tf (to /var/task/web, where
+// scripts/build-lambda.js stages frontend/). The relative fallback is the
+// repo/Docker layout, so local dev is unaffected. Don't drop the env var
+// read: without it a deployed Lambda serves the API fine and 404s every
+// static file, which nothing catches until the site is already live.
+const webDist = process.env.WEB_DIST || path.join(__dirname, '..', '..', 'frontend')
+app.use(express.static(webDist))
+{% else %}
 app.use(express.static(path.join(__dirname, '..', '..', 'frontend')))
+{% endif %}
 
 app.listen(port, () => {
     console.log(`{{ project_name }} backend listening on :${port}`)
