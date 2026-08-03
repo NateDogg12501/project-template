@@ -125,3 +125,40 @@ add workspaces/TypeScript itself; the template shouldn't presuppose it.
 **Consequence:** any project generated from this template starts with zero
 build step. If a project's needs grow into something CalculatorExample-shaped,
 that's a manual upgrade, not something `copier update` will do for you.
+
+## 2026-08-02: Made the generated hosting path actually deployable
+**Context:** `idea-workflow-example-1` hit `could not archive missing
+directory: ./../dist-lambda` on its first real `terraform apply`. Tracing it
+back showed the template — not that project — was the source, and that it
+shipped three separate defects to every `needs_hosting: true` project:
+(1) no `build:lambda` script or packaging script existed anywhere, while
+`terraform/README.md.jinja` carried a literal `[fill in your build:lambda
+command]` placeholder; (2) `backend/src/index.js.jinja` hardcoded
+`express.static(path.join(__dirname,'..','..','frontend'))` and never read
+`WEB_DIST`, even though `main.tf.jinja` sets `WEB_DIST=/var/task/web`;
+(3) the module pin was `v1.0.0`, whose `archive_file` drops `run.sh`'s
+executable bit on Windows (fixed upstream in `v1.1.0`).
+**Decision:** Added `template/backend/scripts/build-lambda.js` (gated on
+`needs_hosting`, removed with `terraform/` by a `_tasks` entry when hosting
+is off), wired it up as `build:lambda`, made `index.js.jinja` read `WEB_DIST`
+with the relative path as fallback, bumped both module pins to `v1.2.0`, and
+replaced the README placeholder with real instructions.
+**Why not leave the build step per-project:** the placeholder was a standing
+invitation for every project to invent its own packaging, and the one project
+that reached deployment simply hit an error instead. A template that
+configures `WEB_DIST` in Terraform is already asserting a contract about the
+artifact layout — it should ship the code that satisfies it.
+**Why (2) was the more dangerous defect:** the missing build script failed
+loudly at `terraform apply`. The unread `WEB_DIST` would have failed
+*silently* — API healthy, every static file 404, discovered only after the
+site was live. CalculatorExample reads `WEB_DIST` (`packages/server/src/
+config.ts`); the template took the Terraform half of that pattern and left
+the application half behind.
+**Consequence:** `terraform apply` for generated projects now requires
+`python3` on PATH (inherited from the `v1.1.0` module's zip script).
+`build-lambda.js` copies an explicit list of `frontend/` files, so any new
+static asset must be added there or it will 404 in production only — called
+out in the generated `terraform/README.md`. The script falls back to `npm
+install` with a warning when no `package-lock.json` exists yet (a fresh
+scaffold has none), so builds are only reproducible once that lock is
+committed.

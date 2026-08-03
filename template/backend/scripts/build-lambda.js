@@ -1,0 +1,68 @@
+#!/usr/bin/env node
+// Assembles ../dist-lambda: the artifact terraform/ zips and deploys via the
+// shared lambda-web-app module. Run `npm run build:lambda` from backend/.
+//
+// The module zips this directory but does not build it, and (since it stopped
+// using archive_file) will not fail loudly on a stale or partial one — it has
+// preconditions for the missing/empty case, but correctness of the *contents*
+// is this script's job.
+import { execSync } from 'node:child_process'
+import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const backendDir = path.join(__dirname, '..')
+const repoRoot = path.join(backendDir, '..')
+const distDir = path.join(repoRoot, 'dist-lambda')
+
+// Clear contents but never remove distDir itself: deleting and recreating a
+// directory is flaky on Windows when anything (an editor, a virus scanner, a
+// shell sitting in it) briefly holds a handle. Same reason CalculatorExample's
+// scripts/package-lambda.mjs overwrites in place.
+mkdirSync(distDir, { recursive: true })
+for (const stale of ['src', 'web', 'node_modules', 'package.json', 'package-lock.json', 'run.sh']) {
+    rmSync(path.join(distDir, stale), { recursive: true, force: true })
+}
+
+cpSync(path.join(backendDir, 'src'), path.join(distDir, 'src'), { recursive: true })
+cpSync(path.join(backendDir, 'package.json'), path.join(distDir, 'package.json'))
+
+// A freshly scaffolded project has no lock file until someone runs
+// `npm install`, so this has to degrade rather than crash — but an unlocked
+// dependency tree is not something to deploy silently, hence the warning.
+const lockFile = path.join(backendDir, 'package-lock.json')
+const hasLock = existsSync(lockFile)
+if (hasLock) {
+    cpSync(lockFile, path.join(distDir, 'package-lock.json'))
+} else {
+    console.warn(
+        'WARNING: no backend/package-lock.json — installing unpinned deps into the ' +
+            'artifact. Run `npm install` in backend/ and commit the lock file to make ' +
+            'this build reproducible.',
+    )
+}
+
+// Explicit file list rather than copying frontend/ wholesale — that directory
+// also holds package.json, test/, and vitest.config.js, none of which belong
+// in a deployed bundle. Add new static assets here.
+const webDir = path.join(distDir, 'web')
+mkdirSync(webDir, { recursive: true })
+for (const file of ['index.html', 'app.js', 'styles.css']) {
+    cpSync(path.join(repoRoot, 'frontend', file), path.join(webDir, file))
+}
+
+execSync(hasLock ? 'npm ci --omit=dev' : 'npm install --omit=dev', {
+    cwd: distDir,
+    stdio: 'inherit',
+})
+
+// run.sh is what the Lambda Web Adapter's zip-package handler execs. The 0o755
+// here is a no-op on Windows (NTFS has no Unix exec bit) — the module's
+// zip_lambda.py sets the mode inside the zip explicitly, which is what
+// actually makes this work cross-platform.
+writeFileSync(path.join(distDir, 'run.sh'), '#!/bin/sh\nexec node src/index.js\n', {
+    mode: 0o755,
+})
+
+console.log(`Built Lambda artifact at ${distDir}`)
