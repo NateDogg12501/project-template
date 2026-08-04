@@ -5,22 +5,19 @@ _envops:
   trim_blocks: true
   lstrip_blocks: true
 
+# Which files exist is decided by the *path names* under template/ — a
+# directory literally named `{{ 'terraform' if needs_hosting else '' }}`
+# renders to the empty string when HOSTED is off, and Copier skips it and
+# everything under it. Gating therefore lives next to the content it gates,
+# and (unlike the `rm -rf` tasks this replaced) it applies to `copier update`
+# too, not only to the first `copier copy`. See docs/decisions.md.
 _tasks:
   - command: "git init"
     when: "{{ _copier_operation == 'copy' }}"
-  - command: "rm -rf terraform"
-    when: "{{ _copier_operation == 'copy' and not needs_hosting }}"
-  # Only meaningful alongside terraform/ — it builds that module's source_dir.
-  # Whole dir, not just the file: build-lambda.js is currently its only
-  # occupant, and leaving an empty backend/scripts/ behind is just noise.
-  - command: "rm -rf backend/scripts"
-    when: "{{ _copier_operation == 'copy' and not needs_hosting }}"
-  - command: "rm -f docs/mock-vs-real.md"
-    when: "{{ _copier_operation == 'copy' and flavor != 'demo' }}"
   - command: "git add -A"
     when: "{{ _copier_operation == 'copy' }}"
   - command: >-
-      git commit --quiet -m "Scaffold from project-template (flavor: {{ flavor }})"
+      git commit --quiet -m "Scaffold from project-template (preset: {{ flavor }})"
     when: "{{ _copier_operation == 'copy' }}"
   - command: >-
       gh repo create {{ (github_owner + '/') if github_owner else '' }}{{ project_slug }} --private --source=. --remote=origin --push
@@ -42,26 +39,43 @@ description:
   help: "One sentence: what this project is (goes into README.md and CLAUDE.md)"
   placeholder: "A small app for saving and tagging recipes"
 
+# A preset only moves the *defaults* of the capability questions below; it
+# owns no files of its own. Every capability stays individually overridable
+# after a preset is picked, so a preset can never be the reason a project
+# can't have some combination. See STANDARDS.md's "Presets".
 flavor:
   type: str
-  help: "Which extended pipeline to layer on top of core — see STANDARDS.md's Flavors section"
+  help: "Preset — pre-selects the capability answers below. You can still override each one."
   choices:
-    - core
-    - demo
-    # "personal" is intentionally not offered yet — see STANDARDS.md's
-    # Flavors section and docs/decisions.md. Add it back here once its
-    # content actually exists; don't offer a choice that currently changes
-    # nothing.
+    "core — API + UI, deployed to AWS": core
+    "prototype — API + UI, local-only": prototype
   default: core
 
+needs_api:
+  type: bool
+  help: "API capability: an Express backend in backend/, run by docker compose."
+  default: true
+
+needs_ui:
+  type: bool
+  help: "UI capability: static files in frontend/."
+  default: true
+  validator: "{% if not needs_api and not needs_ui %}A project needs at least one of API or UI — with both off this template generates docs and nothing else.{% endif %}"
+
+# Depends on API: the HOSTED path deploys a Node handler behind a Lambda
+# Function URL, so there has to be a server to deploy. `when` keeps the
+# question from being asked when it cannot apply; the default repeats the
+# condition so a skipped question still resolves to false rather than to the
+# preset's value.
 needs_hosting:
   type: bool
-  help: "Deployed to AWS (Lambda, Always Free tier) as well as local-only?"
-  default: true
+  help: "HOSTED capability: deployed to AWS Lambda (Always Free), as well as run locally."
+  default: "{{ needs_api and flavor != 'prototype' }}"
+  when: "{{ needs_api }}"
 
 needs_datastore:
   type: bool
-  help: "Needs a database (DynamoDB via the shared terraform-modules dynamodb-single-table module)?"
+  help: "DATABASE capability: DynamoDB via the shared terraform-modules dynamodb-single-table module. Requires HOSTED."
   default: false
   when: "{{ needs_hosting }}"
 

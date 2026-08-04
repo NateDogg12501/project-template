@@ -2,8 +2,10 @@
 
 Scaffolds new small full-stack projects: Docker-Composeable locally,
 Lambda-deployable on AWS Always Free, with a CLAUDE.md/README/decisions-log
-skeleton pre-filled from the start. See [STANDARDS.md](STANDARDS.md) for
-the rules this template encodes and what each `flavor` adds.
+skeleton pre-filled from the start. You pick a set of **capabilities** (API,
+UI, HOSTED, DATABASE) rather than a project type; see
+[STANDARDS.md](STANDARDS.md) for what each one brings and the rule that
+holds them together.
 
 ## What each tool is doing here
 
@@ -42,9 +44,10 @@ the local path instead: `copier copy . ../my-new-project`, run from inside
 this repo. The difference is only where Copier reads the template from;
 the questions asked and the output are identical either way.)
 
-You'll be asked for `project_name`, `description`, `flavor` (`core`/`demo`
-— see STANDARDS.md's Flavors section for why `personal` isn't offered yet),
-and whether it needs hosting/a datastore. The generated repo is `git
+You'll be asked for `project_name`, `description`, a preset (`flavor`:
+`core` or `prototype`), and then one question per capability — API, UI,
+HOSTED, DATABASE. The preset only moves those four defaults; you can
+override any of them. The generated repo is `git
 init`'d, given a first commit, and pushed to a new **private** GitHub repo
 (named after `project_slug`) under your authenticated `gh` account —
 automatically. Requires the [GitHub CLI](https://cli.github.com/) (`gh`)
@@ -63,47 +66,58 @@ whatever you've since changed by hand.
 
 ## Repo layout
 
-- `copier.yml` — the questionnaire + task hooks (git init/commit, flavor
-  file pruning). Not copied into generated projects.
+- `copier.yml` — the questionnaire + task hooks (git init/commit, `gh repo
+  create`). Not copied into generated projects.
 - `STANDARDS.md` — the durable rules, source of truth, linked (not copied)
   from every generated project's `CLAUDE.md`.
 - `template/` — everything that *is* copied, Jinja2-rendered
   (`_subdirectory: template` in `copier.yml`). `.jinja`-suffixed files are
-  rendered; everything else is copied verbatim.
+  rendered; everything else is copied verbatim. **Directory and file names
+  are rendered too**, which is how capabilities gate whole subtrees — see
+  below.
 
-## Adding or changing a flavor
+## Adding a capability
 
-See STANDARDS.md's "Flavors" section for the two places a flavor has to be
-defined (the `copier.yml` question, and real conditionals in `template/`) —
-a flavor that's only a description in `copier.yml` does nothing. Concretely:
+STANDARDS.md's "Capabilities" section has the contract: a capability owns
+its files, its tests, *and* its CI job, and none of the three is optional.
+Mechanically:
 
-1. Add the flavor to `flavor`'s `choices` in `copier.yml`.
-2. Give it real content in `template/` — either inline
-   `{% if flavor == "yours" %}...{% endif %}` blocks in shared files
-   (`CLAUDE.md.jinja`, `README.md.jinja`), and/or whole files that only
-   belong to that flavor, pruned for everyone else via a `_tasks` entry
-   (see `docs/mock-vs-real.md.jinja` + its `rm -f` task as the pattern).
-3. **A flavor can also ask its own questions**, not just branch on content —
-   any question in `copier.yml` accepts a `when` condition, the same way
-   `needs_datastore` only asks `when: "{{ needs_hosting }}"`. A
-   `demo`-only question would look like:
-   ```yaml
-   mock_target:
-     type: str
-     help: "Which external dependency does this demo mock?"
-     when: "{{ flavor == 'demo' }}"
+1. Add a `needs_<thing>` bool question to `copier.yml`. If it depends on
+   another capability, express that with `when:` plus a `default:` that
+   repeats the condition (see `needs_hosting`), and add a `validator:` for
+   anything `when:` can't express.
+2. Put its files under `template/` inside a path whose **name** is the gate:
    ```
-4. Log *why* the flavor exists and what it's for in `docs/decisions.md`
-   (this repo's, not the generated-project one) — see STANDARDS.md's "How
-   standards get added."
+   template/{{ 'terraform' if needs_hosting else '' }}/main.tf.jinja
+   ```
+   Copier renders path names, and a name that renders to the empty string is
+   skipped along with everything under it. This works on `copier update` as
+   well as `copier copy` — the `rm -rf` `_tasks` it replaced only ran on the
+   first copy, so an update would resurrect files a project had turned off.
+   Verified against Copier 9.17.0; see `docs/decisions.md`.
+3. Sections *inside* files everyone gets (`README.md.jinja`,
+   `CLAUDE.md.jinja`, `.github/workflows/ci.yml.jinja`) stay inline
+   `{% if needs_thing %}` blocks — a whole-file gate would mean two copies
+   of a mostly identical file.
+4. Give it a job in `template/.github/workflows/ci.yml.jinja`, gated on the
+   same flag.
+5. **A capability can also ask its own questions** — any `copier.yml`
+   question accepts `when:`, the way `needs_datastore` only asks
+   `when: "{{ needs_hosting }}"`.
+6. Log why it exists in `docs/decisions.md` (this repo's, not the
+   generated-project one) — see STANDARDS.md's "How standards get added."
 
-**On whether this scales as flavors grow**: with more than two or three
-flavors, inline `{% if %}` blocks scattered across shared files would get
-hard to read, and Copier's own docs acknowledge this — the documented
-answer at that point is composing multiple templates together (a base
-template plus a flavor-specific overlay, applied in sequence) rather than
-one template with ever-more conditionals. `docs/decisions.md` has the full
-reasoning for staying with the simpler inline approach for now — the short
-version: two flavors don't justify that complexity yet, and the concrete
-trigger for revisiting it is a flavor that needs to *restructure* shared
-files rather than just add a section to them.
+Then update `CopierAnswers` in
+[idea-workflow](https://github.com/NateDogg12501/idea-workflow)'s
+`orchestrator/src/plan.ts` and the architect prompt that writes it. That
+interface mirrors `copier.yml` exactly and is versioned, because its
+instances live in Jira comments that may be weeks old — adding a required
+answer is a `Plan.version` bump.
+
+## Adding a preset
+
+A preset (the `flavor` question) is a named bundle of capability *defaults*
+and owns no files. Adding one is a new entry in `flavor`'s `choices`, the
+capability defaults that reference it, a line in STANDARDS.md's "Presets",
+and a `docs/decisions.md` entry. If it needs files of its own, it is not a
+preset — it is a capability.

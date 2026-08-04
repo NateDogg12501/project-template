@@ -1,13 +1,16 @@
 import express from 'express'
+{% if needs_ui %}
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+{% endif %}
 const app = express()
 const port = process.env.PORT || 3000
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok' }))
 
+{% if needs_ui %}
 // [Extend: mount /api/* routes here — this is the backend/frontend
 // boundary. Keep frontend/ ignorant of anything beyond these responses.]
 
@@ -21,6 +24,11 @@ const webDist = process.env.WEB_DIST || path.join(__dirname, '..', '..', 'fronte
 app.use(express.static(webDist))
 {% else %}
 app.use(express.static(path.join(__dirname, '..', '..', 'frontend')))
+{% endif %}
+{% else %}
+// [Extend: mount /api/* routes here. This project has no UI capability —
+// nothing is served statically, every response is JSON.]
+
 {% endif %}
 
 app.listen(port, () => {
