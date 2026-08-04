@@ -43,6 +43,7 @@ if (hasLock) {
     )
 }
 
+{% if needs_ui %}
 // Explicit file list rather than copying frontend/ wholesale — that directory
 // also holds package.json, test/, and vitest.config.js, none of which belong
 // in a deployed bundle. Add new static assets here.
@@ -51,6 +52,7 @@ mkdirSync(webDir, { recursive: true })
 for (const file of ['index.html', 'app.js', 'styles.css']) {
     cpSync(path.join(repoRoot, 'frontend', file), path.join(webDir, file))
 }
+{% endif %}
 
 execSync(hasLock ? 'npm ci --omit=dev' : 'npm install --omit=dev', {
     cwd: distDir,

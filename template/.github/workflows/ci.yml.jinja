@@ -6,6 +6,7 @@ on:
     branches: [main]
 
 jobs:
+{% if needs_api %}
   backend:
     runs-on: ubuntu-latest
     defaults:
@@ -20,6 +21,24 @@ jobs:
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
       - run: npm test --if-present
+{% endif %}
+{% if needs_ui %}
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # frontend/ has no test runner yet, so this is the UI capability's CI
+      # job in its minimal honest form: every script that ships must at
+      # least parse. Replace it with vitest the moment frontend/ grows real
+      # tests — but don't delete it and leave UI with no job at all, or the
+      # template is back to shipping a frontend nothing checks.
+      - name: Syntax-check frontend scripts
+        run: find frontend -name '*.js' -print0 | xargs -0 -r -n1 node --check
+{% endif %}
 {% if needs_hosting %}
 
   terraform:

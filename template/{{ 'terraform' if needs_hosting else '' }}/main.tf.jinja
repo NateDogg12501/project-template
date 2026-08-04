@@ -23,8 +23,18 @@ module "app" {
     # APP_SECRET = "/{{ project_slug }}/app_secret"
   }
 
+  # The `=` padding is capability-dependent because `terraform fmt -check` is
+  # a CI step: HCL aligns `=` across a block, so WEB_DIST's spacing depends on
+  # whether ITEMS_TABLE_NAME is beside it. Generating the unaligned version
+  # made every DATABASE project fail its own terraform job on the first push.
   environment_variables = {
+{% if needs_ui %}
+{% if needs_datastore %}
+    WEB_DIST         = "/var/task/web"
+{% else %}
     WEB_DIST = "/var/task/web"
+{% endif %}
+{% endif %}
 {% if needs_datastore %}
     ITEMS_TABLE_NAME = module.table.table_name
 {% endif %}

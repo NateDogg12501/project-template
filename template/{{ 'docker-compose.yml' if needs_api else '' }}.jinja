@@ -3,7 +3,9 @@ services:
     build: ./backend
     ports:
       - "${BACKEND_PORT:-3000}:3000"
+{% if needs_ui %}
     volumes:
       - ./frontend:/app/frontend
+{% endif %}
     environment:
       - PORT=3000
