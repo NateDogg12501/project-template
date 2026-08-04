@@ -80,6 +80,19 @@ numbers, not the account's. Every gate passing means no single resource
 knowingly left the free tier — not that the account is still inside it, since
 allowances like DynamoDB's are account-wide.
 
+**Where the decision gets recorded depends on the stage.** This rule is enforced
+at two points, and "logged in `docs/decisions.md`" names the obligation to write
+the decision down — not that one filename everywhere:
+
+| Stage | Gate | Record |
+|---|---|---|
+| Idea → plan (`idea-workflow`'s architect, pending Brief D1) | An idea that genuinely cannot fit Always Free stops, rather than being best-fitted into a plan that quietly spends | needs-decision file, for a human to answer |
+| Plan → apply (Terraform) | `cost_acknowledged` precondition fails the plan | that project's `docs/decisions.md` |
+
+The architect gate fires before a project exists, so it has no
+`docs/decisions.md` to write into — the needs-decision file *is* the record at
+that stage. Both refuse to proceed silently; both hand the call to a human.
+
 ## Structure
 
 - Clean FE/BE separation — `backend/` and `frontend/` are independently

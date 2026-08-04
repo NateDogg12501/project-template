@@ -202,6 +202,11 @@ checklist in `terraform-modules`' README. The gate is per-module and cannot
 see account-wide usage: DynamoDB's 25 RCU/25 WCU allowance is shared across
 every table in every project, so all gates passing means no single resource
 knowingly left the free tier, not that the account is still inside it. The
-wording above is the anchor for the pipeline-side gate (Brief D1), which does
-not exist yet — if that gate lands with different wording, one of the two
-should move so there is a single phrasing of the rule, not two.
+rule gets a second enforcement point ahead of Terraform once Brief D1 lands:
+`idea-workflow`'s architect prompt stops at *plan* time when an idea genuinely
+cannot fit Always Free, writing a needs-decision file for a human rather than
+producing a best-fit plan. Same rule, two stages, deliberately different
+artifacts — at architect time no project exists yet, so the needs-decision file
+*is* the record; `docs/decisions.md` is where the reasoning lands once there is
+a project to put it in. Read "logged in `docs/decisions.md`" as naming the
+obligation to write the decision down, not that one filename at every stage.
