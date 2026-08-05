@@ -6,7 +6,18 @@ on:
     branches: [main]
 
 jobs:
+  claude-md:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check CLAUDE.md placeholders are filled in
+        run: |
+          if grep -nE '\[(fill in|Expand:|Things|What|Bugs|Scope cuts|The 2-3)' CLAUDE.md; then
+            echo "CLAUDE.md still has unfilled template placeholders (see matches above) — fill them in before merging." >&2
+            exit 1
+          fi
 {% if needs_api %}
+
   backend:
     runs-on: ubuntu-latest
     defaults:
