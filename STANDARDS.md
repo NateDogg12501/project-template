@@ -30,17 +30,78 @@ will tell you.
 
 ## Hosting
 
-- AWS Always Free services only. If a design needs something outside the
-  free tier, that's worth a `docs/decisions.md` entry in that project, not
-  a silent default.
+- **AWS Always Free unless logged in `docs/decisions.md` and explicitly
+  confirmed.** Both halves are required. A `docs/decisions.md` entry without
+  the confirmation is a note nobody acted on; a confirmation without the entry
+  is a charge nobody can explain in three months.
 - DynamoDB's always-free allowance (25 RCU/25 WCU/25GB) is shared per AWS
   account+region **across all tables in all projects** — keep that in mind
-  before a new project's datastore need pushes the account over it.
+  before a new project's datastore need pushes the account over it. Note the
+  allowance covers *provisioned* capacity only: `PAY_PER_REQUEST` (on-demand)
+  is billable from the first request, at any volume.
+- Anything with unbounded growth gets an explicit bound, even when it starts
+  free. CloudWatch log groups are the standing example: left alone, Lambda
+  auto-creates one with retention `Never Expire`, and the 5GB free tier is
+  where billing *starts*, not a cap. `lambda-web-app` sets a 14-day default
+  for exactly this reason.
 - Use the shared modules in [`terraform-modules`](../terraform-modules)
   (`lambda-web-app`, `dynamodb-single-table`) rather than hand-writing
   Lambda/DynamoDB resources again — see that repo's README for the
   gotchas already solved there (Function URL permissions, provider version,
   GSI key_schema bug).
+
+### Enforcement: `cost_acknowledged`
+
+The rule above is enforced in code, not by remembering it. **Any module that
+provisions billable resources takes a `cost_acknowledged` boolean (defaulting
+to `false`) and a `lifecycle` precondition that fails the plan when the
+configuration is billable and the flag is false.** You cannot accidentally
+apply a paid resource — only deliberately.
+
+```hcl
+lifecycle {
+  precondition {
+    condition     = local.within_always_free || var.cost_acknowledged
+    error_message = "<what is billable here, and what the free allowance is>"
+  }
+}
+```
+
+Four things make this work, and each is load-bearing:
+
+- **A precondition, not a variable `validation`.** Whether a configuration is
+  billable is usually a function of several inputs together (billing mode
+  *and* summed capacity, say), which no single-variable validation can see.
+- **It fails the plan, not the apply.** The failure lands before anything is
+  created, so there is no half-provisioned state to clean up.
+- **It defaults to `false`.** The safe path is the one you get by not thinking
+  about it; spending takes an affirmative act.
+- **The message names the cost.** "Billable" on its own sends someone to the
+  AWS pricing page; naming the resource and the allowance it exceeds lets them
+  decide on the spot.
+
+`dynamodb-single-table` in [`terraform-modules`](../terraform-modules) is the
+reference implementation. Setting the flag satisfies the mechanism but not the
+standard — the `docs/decisions.md` entry is the other half, and no precondition
+can check that you wrote it.
+
+The gate is per-module, which bounds what it can promise: a module sees its own
+numbers, not the account's. Every gate passing means no single resource
+knowingly left the free tier — not that the account is still inside it, since
+allowances like DynamoDB's are account-wide.
+
+**Where the decision gets recorded depends on the stage.** This rule is enforced
+at two points, and "logged in `docs/decisions.md`" names the obligation to write
+the decision down — not that one filename everywhere:
+
+| Stage | Gate | Record |
+|---|---|---|
+| Idea → plan (`idea-workflow`'s architect) | An idea that genuinely cannot fit Always Free stops, rather than being best-fitted into a plan that quietly spends | needs-decision file, for a human to answer |
+| Plan → apply (Terraform) | `cost_acknowledged` precondition fails the plan | that project's `docs/decisions.md` |
+
+The architect gate fires before a project exists, so it has no
+`docs/decisions.md` to write into — the needs-decision file *is* the record at
+that stage. Both refuse to proceed silently; both hand the call to a human.
 
 ## Structure
 
