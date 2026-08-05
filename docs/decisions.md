@@ -378,6 +378,54 @@ because the *cause* was a change here, and a future session changing
 `copier.yml` needs to find out from this repo that a cross-repo contract moves
 with it.
 
+## 2026-08-03: Cost standard becomes "log it and confirm it", enforced by a plan-time gate
+**Context:** the Hosting rule was "AWS Always Free services only", with an
+aside that anything outside the free tier "is worth a `docs/decisions.md`
+entry". Two problems. It was absolute in a way nothing enforced — the only
+thing standing between the account and a bill was whoever happened to read
+the plan output. And it had no answer for the legitimate case where a project
+genuinely needs a paid resource, so the rule's real-world effect was to be
+quietly broken rather than consciously departed from. Concretely: nothing
+stopped `dynamodb-single-table` from being handed
+`billing_mode = "PAY_PER_REQUEST"`, which is not in the free tier at all and
+bills from the first request, and `lambda-web-app` left log retention at
+`Never Expire` forever.
+**Decision:** the rule is now **AWS Always Free unless logged in
+`docs/decisions.md` and explicitly confirmed**, and "explicitly confirmed" is
+a `cost_acknowledged` boolean (default `false`) plus a `lifecycle`
+precondition in any module that provisions billable resources. The
+precondition fails the **plan** when the configuration is billable and the
+flag is false. Implemented first in `terraform-modules`'
+`dynamodb-single-table` (v2.0.0), which is the reference implementation.
+**Why not keep "Always Free only":** an absolute rule with no exit is one
+people route around silently. Naming the exit and making it cost two
+deliberate acts — write the entry, set the flag — gets a decision recorded
+instead of a rule quietly ignored.
+**Why not a variable `validation` block:** billability is a function of
+several inputs together (billing mode *and* capacity summed over the table
+and its GSIs), and a `validation` block can only see the one variable it is
+attached to.
+**Why not a CI check or a cost-estimation tool:** CI runs on a PR; the money
+gets spent at `terraform apply`, which is run by hand. A precondition is
+attached to the resource itself, so it holds wherever the plan runs — and it
+needs no new dependency.
+**Consequence:** the flag defaulting to `false` means adding a billable
+configuration to an existing project now fails the plan until someone opts
+in, which is the intended friction. Every new module that can provision
+billable resources has to implement the gate — added to the "Adding a module"
+checklist in `terraform-modules`' README. The gate is per-module and cannot
+see account-wide usage: DynamoDB's 25 RCU/25 WCU allowance is shared across
+every table in every project, so all gates passing means no single resource
+knowingly left the free tier, not that the account is still inside it. The
+rule gets a second enforcement point ahead of Terraform once Brief D1 lands:
+`idea-workflow`'s architect prompt stops at *plan* time when an idea genuinely
+cannot fit Always Free, writing a needs-decision file for a human rather than
+producing a best-fit plan. Same rule, two stages, deliberately different
+artifacts — at architect time no project exists yet, so the needs-decision file
+*is* the record; `docs/decisions.md` is where the reasoning lands once there is
+a project to put it in. Read "logged in `docs/decisions.md`" as naming the
+obligation to write the decision down, not that one filename at every stage.
+
 ## 2026-08-04: Every capability ships a real test suite, its own `vitest.config.js`, and a committed lock file
 **Context:** the capability contract above says a capability owns its files,
 its tests, and its CI job — but neither shipping capability actually had tests.
