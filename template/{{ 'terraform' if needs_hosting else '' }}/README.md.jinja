@@ -12,10 +12,10 @@ module{% if needs_datastore %} and
    cd ../backend && npm run build:lambda
    ```
    This runs `backend/scripts/build-lambda.js`, which stages `backend/src`,
-   production-only `node_modules`, `frontend/`'s static files (into
-   `dist-lambda/web`, matching the `WEB_DIST` that `main.tf` sets), and the
-   `run.sh` the Lambda Web Adapter execs. Re-run it after **any** backend or
-   frontend change — `terraform apply` zips this directory, it does not
+   production-only `node_modules`,{% if needs_ui %} `frontend/`'s static files (into
+   `dist-lambda/web`, matching the `WEB_DIST` that `main.tf` sets),{% endif %} and the
+   `run.sh` the Lambda Web Adapter execs. Re-run it after **any** {% if needs_ui %}backend or
+   frontend{% else %}backend{% endif %} change — `terraform apply` zips this directory, it does not
    build it.
 2. Create every SSM parameter referenced in `main.tf`'s `ssm_secret_env_vars`:
    ```bash
@@ -26,6 +26,7 @@ module{% if needs_datastore %} and
 `terraform apply` needs `python3` on PATH — the module zips the artifact with
 a helper script rather than `archive_file`, so `run.sh` keeps its executable
 bit even when the zip is built on Windows.
+{% if needs_ui %}
 
 ## Adding static assets
 
@@ -33,3 +34,4 @@ bit even when the zip is built on Windows.
 (`index.html`, `app.js`, `styles.css`) rather than the whole directory, since
 that directory also holds `package.json` and tests. **Add new static assets
 to that list**, or they will work locally and 404 in production.
+{% endif %}

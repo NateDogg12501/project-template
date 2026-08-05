@@ -16,5 +16,5 @@ Format per entry:
 
 ## Scaffolding
 **Context:** starting {{ project_name }} from `project-template`.
-**Decision:** flavor = `{{ flavor }}`{% if needs_hosting %}, hosted on AWS Lambda{% if needs_datastore %} with DynamoDB{% endif %}{% else %}, local-only{% endif %}.
+**Decision:** preset `{{ flavor }}` — capabilities {% if needs_api %}API{% endif %}{% if needs_ui %}{% if needs_api %} + {% endif %}UI{% endif %}{% if needs_hosting %} + HOSTED{% endif %}{% if needs_datastore %} + DATABASE{% endif %}{% if not needs_hosting %} (local-only){% endif %}.
 **Why:** {{ description }}

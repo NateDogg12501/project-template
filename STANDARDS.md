@@ -16,7 +16,17 @@ separate from the *generated-project* decisions log downstream projects get
 (`template/docs/decisions.md.jinja`) — this repo, being the thing every
 project inherits from, holds itself to the same discipline it asks of them.
 See `docs/decisions.md` for the reasoning behind Copier, this file's own
-existence as a separate un-templated file, and the flavor choices below.
+existence as a separate un-templated file, and the capability model below.
+
+**This file describes only what is currently true.** Options that were
+removed, and options that are merely planned, do not belong here in any
+form — not as a "deprecated" note, not as a "not yet defined" placeholder.
+They live in `docs/decisions.md`, which is the provenance layer and is
+allowed to talk about the past and the hypothetical. The reason is not
+tidiness: this file is the normative input every future session reads, and
+anything described here gets treated as live design input whether or not it
+still exists. If you need to know why something is gone, `docs/decisions.md`
+will tell you.
 
 ## Hosting
 
@@ -86,7 +96,7 @@ the decision down — not that one filename everywhere:
 
 | Stage | Gate | Record |
 |---|---|---|
-| Idea → plan (`idea-workflow`'s architect, pending Brief D1) | An idea that genuinely cannot fit Always Free stops, rather than being best-fitted into a plan that quietly spends | needs-decision file, for a human to answer |
+| Idea → plan (`idea-workflow`'s architect) | An idea that genuinely cannot fit Always Free stops, rather than being best-fitted into a plan that quietly spends | needs-decision file, for a human to answer |
 | Plan → apply (Terraform) | `cost_acknowledged` precondition fails the plan | that project's `docs/decisions.md` |
 
 The architect gate fires before a project exists, so it has no
@@ -98,8 +108,10 @@ that stage. Both refuse to proceed silently; both hand the call to a human.
 - Clean FE/BE separation — `backend/` and `frontend/` are independently
   runnable and testable; no backend logic imported into frontend code or
   vice versa.
-- `docker compose up -d --build` is always the one true "run this locally"
-  command — no undocumented manual setup steps.
+- `docker compose up -d --build` is the one true "run this locally" command
+  for any project with the API capability — no undocumented manual setup
+  steps. A UI-only project has no server to compose, and says so in its
+  README instead.
 
 ## Documentation
 
@@ -129,37 +141,70 @@ that stage. Both refuse to proceed silently; both hand the call to a human.
   Actions instead (see the `.github/claude-review.yml.example` stub in each
   generated repo).
 
-## Flavors
+## Capabilities
 
-Flavors are defined in two places, together — never just one:
-1. The `flavor` question in this repo's `copier.yml`.
-2. Actual conditionals in `template/` content (`{% if flavor == "..." %}`
-   blocks, and/or whole files removed by `_tasks` for flavors that don't
-   need them).
+A project is not a *kind*; it is a *set of capabilities*. Each one is a
+single boolean in `copier.yml`, independently on or off:
 
-### `core`
-Everything above. Nothing else. Used for anything that isn't explicitly a
-demo or a personal project.
+| Capability | Question | Means |
+|---|---|---|
+| API | `needs_api` | An Express backend in `backend/`, run by docker compose. |
+| UI | `needs_ui` | Static files in `frontend/`. |
+| HOSTED | `needs_hosting` | Deployed to AWS Lambda on Always Free, via `terraform/`. |
+| DATABASE | `needs_datastore` | DynamoDB, via the shared `dynamodb-single-table` module. |
 
-### `demo`
-Adds the mock/real toggle convention (see `docs/mock-vs-real.md` in a
-generated `demo`-flavor project) — the point of a demo project is
-contrasting a mocked dependency against the real thing, MokapiExample-style,
-not just building the thing. Concretely: every external integration gets a
-Source switch in the UI and a normalization layer in the backend so both
-paths render identically to the frontend.
+### The contract: a capability owns its files, its tests, and its CI job
 
-### `personal`
-**Not yet defined, and not currently selectable** — removed from
-`copier.yml`'s `flavor` choices (see `docs/decisions.md`) rather than left
-as an option that silently does nothing.
+All three travel together. A capability is not finished — is not *a
+capability* — until all three exist. Concretely, to add one:
 
-What "don't guess at personal project conventions ahead of having one"
-means concretely: `demo` wasn't designed by imagining what a demo project
-might need in the abstract — it was written down *after* MokapiExample
-already existed, by generalizing the pattern that project actually used
-(mock/real toggle, normalization layer). `personal` should get the same
-treatment: build a real personal project first, notice what makes it
-different from `core` or `demo` in practice, then write *that* down here
-and add it back to `copier.yml` — not invent plausible-sounding rules now
-that might not match whatever a real personal project turns out to need.
+1. **Files.** Everything it contributes, gated by *path name*: a directory
+   or file under `template/` literally named
+   `{{ 'terraform' if needs_hosting else '' }}` renders to the empty string
+   when the flag is off, and Copier skips it and everything beneath it. Put
+   the gate in the path, not in a task list, so the gate is visible from the
+   content. Sections *inside* a shared file (`README.md.jinja`,
+   `CLAUDE.md.jinja`, `ci.yml.jinja`) stay inline `{% if %}` blocks.
+2. **Tests.** Its own, testing its own files. Not folded into another
+   capability's suite.
+3. **A CI job.** Its own job in `template/.github/workflows/ci.yml.jinja`,
+   gated on the same flag.
+
+The one allowed exception is a capability that cannot exist alone: DATABASE
+requires HOSTED, contributes only blocks inside `terraform/`, and is
+therefore covered by HOSTED's `terraform` job. A capability riding another's
+job must say so where the job is defined.
+
+**Why the three-part rule and not just "files":** the template shipped a
+`frontend/` for months that no CI job ever touched, because nothing forced
+the files and the job to arrive together. Files are the part you notice
+missing; the CI job is the part you don't.
+
+### Dependencies between capabilities
+
+- HOSTED requires API — the hosted path deploys a Node handler behind a
+  Lambda Function URL, so there must be a server to deploy.
+- DATABASE requires HOSTED — it is provisioned by `terraform/`.
+- At least one of API or UI must be on. Both off generates docs and nothing
+  else, and `copier.yml`'s validator rejects it.
+
+These are enforced in `copier.yml` (`when` + `validator`) and re-checked in
+idea-workflow's `parsePlan`, since that path supplies answers from a file
+rather than interactively.
+
+## Presets
+
+A preset is a named bundle that **pre-selects capability defaults and
+nothing else**. It owns no files. Picking one still leaves every capability
+individually overridable, so a preset can never be the reason some
+combination is unreachable. The `flavor` question holds the preset; it is
+recorded in `.copier-answers.yml`, `README.md` and `CLAUDE.md` as provenance
+— "what was asked for" — while the capability flags are "what was built".
+
+- `core` — API + UI + HOSTED. The default.
+- `prototype` — API + UI, local-only. For something you want running today
+  and are not sure you will keep.
+
+Adding a preset is a defaults-only change to `copier.yml` plus a line here
+and an entry in `docs/decisions.md`. If a proposed preset needs files of its
+own, it isn't a preset — it's a capability, and belongs in the table above.
