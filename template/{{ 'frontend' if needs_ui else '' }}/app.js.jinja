@@ -1,0 +1,43 @@
+// A plain classic script, not an ES module: index.html is opened straight off
+// disk in some setups and file:// refuses module imports. Hanging the functions
+// off `window` keeps that working while still letting frontend/test/ import
+// this file and drive them — under vitest's jsdom environment `window` is the
+// module global too.
+window.app = {
+{% if needs_api %}
+    // Pure: takes the document to write into, returns what it wrote. Kept
+    // separate from checkHealth so rendering can be asserted without stubbing
+    // the network.
+    renderHealth(document, health) {
+        const status = document.querySelector('#status')
+        status.textContent = `Backend: ${health.status}`
+        return status.textContent
+    },
+
+    // fetchImpl is injectable for the same reason. [Extend: this is the whole
+    // frontend. Keep it ignorant of backend internals — it only knows the
+    // shapes /api/* returns.]
+    async checkHealth(document, fetchImpl = window.fetch) {
+        const response = await fetchImpl('/api/health')
+        return window.app.renderHealth(document, await response.json())
+    },
+{% else %}
+    // This project has no API capability — there is no backend to talk to, so
+    // everything the page shows originates here. [Extend: real UI logic.]
+    render(document) {
+        const status = document.querySelector('#status')
+        status.textContent = 'Static build — no backend in this project.'
+        return status.textContent
+    },
+{% endif %}
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+{% if needs_api %}
+    window.app.checkHealth(document).catch((error) => {
+        window.app.renderHealth(document, { status: `unreachable (${error.message})` })
+    })
+{% else %}
+    window.app.render(document)
+{% endif %}
+})

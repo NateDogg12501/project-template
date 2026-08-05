@@ -30,8 +30,9 @@ bit even when the zip is built on Windows.
 
 ## Adding static assets
 
-`build-lambda.js` copies an explicit list of files out of `frontend/`
-(`index.html`, `app.js`, `styles.css`) rather than the whole directory, since
-that directory also holds `package.json` and tests. **Add new static assets
-to that list**, or they will work locally and 404 in production.
+Nothing to do — `build-lambda.js` copies all of `frontend/` into
+`dist-lambda/web` except a fixed set of tooling files (`node_modules`,
+`package.json`, `package-lock.json`, `test/`, `vitest.config.js`). A new asset
+ships automatically. The flip side is that anything you leave in `frontend/`
+is published, so don't park scratch files or secrets there.
 {% endif %}

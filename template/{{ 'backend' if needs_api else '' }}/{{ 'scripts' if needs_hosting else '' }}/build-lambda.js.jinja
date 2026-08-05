@@ -44,14 +44,24 @@ if (hasLock) {
 }
 
 {% if needs_ui %}
-// Explicit file list rather than copying frontend/ wholesale — that directory
-// also holds package.json, test/, and vitest.config.js, none of which belong
-// in a deployed bundle. Add new static assets here.
+// Copy frontend/ wholesale minus a known set, rather than listing the assets
+// to include. An allowlist has to be edited every time an asset is added, and
+// forgetting shows up only in production as a 404 — it works locally, where
+// the file is served off disk. This fails the safe way instead: a new asset
+// ships automatically, and the exclusions are the frontend package's own
+// tooling, a fixed set that doesn't grow as the project does.
+const NOT_DEPLOYED = new Set(['node_modules', 'package.json', 'package-lock.json', 'test', 'vitest.config.js'])
+const frontendDir = path.join(repoRoot, 'frontend')
 const webDir = path.join(distDir, 'web')
-mkdirSync(webDir, { recursive: true })
-for (const file of ['index.html', 'app.js', 'styles.css']) {
-    cpSync(path.join(repoRoot, 'frontend', file), path.join(webDir, file))
-}
+cpSync(frontendDir, webDir, {
+    recursive: true,
+    // Top-level only: the exclusions name specific things that live directly
+    // in frontend/, so a `docs/test/` of static assets is still deployed.
+    filter: (src) => {
+        const relative = path.relative(frontendDir, src)
+        return relative === '' || !NOT_DEPLOYED.has(relative.split(path.sep)[0])
+    },
+})
 {% endif %}
 
 execSync(hasLock ? 'npm ci --omit=dev' : 'npm install --omit=dev', {

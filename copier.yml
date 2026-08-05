@@ -14,6 +14,15 @@ _envops:
 _tasks:
   - command: "git init"
     when: "{{ _copier_operation == 'copy' }}"
+  # Installs before the first commit so the lock files are *in* it. Both npm
+  # CI jobs run `npm ci`, which fails outright without a lock file, and a
+  # scaffolded project should be able to run its own tests immediately rather
+  # than after an undocumented setup step. Not a substitute for path-name
+  # gating — these tasks build, they don't prune.
+  - command: "npm install --prefix backend"
+    when: "{{ _copier_operation == 'copy' and needs_api }}"
+  - command: "npm install --prefix frontend"
+    when: "{{ _copier_operation == 'copy' and needs_ui }}"
   - command: "git add -A"
     when: "{{ _copier_operation == 'copy' }}"
   - command: >-

@@ -20,24 +20,27 @@ jobs:
           cache: npm
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
-      - run: npm test --if-present
+      # Plain `npm test`, not `--if-present`: the API capability ships tests,
+      # so a package with no test script is a defect this job should catch,
+      # not something it should skip past.
+      - run: npm test
 {% endif %}
 {% if needs_ui %}
 
   frontend:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      # frontend/ has no test runner yet, so this is the UI capability's CI
-      # job in its minimal honest form: every script that ships must at
-      # least parse. Replace it with vitest the moment frontend/ grows real
-      # tests — but don't delete it and leave UI with no job at all, or the
-      # template is back to shipping a frontend nothing checks.
-      - name: Syntax-check frontend scripts
-        run: find frontend -name '*.js' -print0 | xargs -0 -r -n1 node --check
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm test
 {% endif %}
 {% if needs_hosting %}
 

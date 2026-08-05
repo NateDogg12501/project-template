@@ -1,0 +1,41 @@
+import express from 'express'
+{% if needs_ui %}
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+{% endif %}
+
+// The app is assembled here and started in src/index.js. Nothing at import
+// time binds a port, which is what lets backend/test/ drive it with supertest;
+// keep it that way when you add routes.
+export function createApp() {
+    const app = express()
+
+    app.get('/api/health', (_req, res) => res.json({ status: 'ok' }))
+{% if needs_ui %}
+
+    // [Extend: mount /api/* routes here — this is the backend/frontend
+    // boundary. Keep frontend/ ignorant of anything beyond these responses.]
+{% if needs_hosting %}
+
+    // WEB_DIST is set by terraform/main.tf (to /var/task/web, where
+    // scripts/build-lambda.js stages frontend/). The relative fallback is the
+    // repo/Docker layout, so local dev is unaffected. Don't drop the env var
+    // read: without it a deployed Lambda serves the API fine and 404s every
+    // static file, which nothing catches until the site is already live.
+    // Read per-call, not at import time, so a test can point it somewhere.
+    const webDist = process.env.WEB_DIST || path.join(__dirname, '..', '..', 'frontend')
+{% else %}
+
+    const webDist = path.join(__dirname, '..', '..', 'frontend')
+{% endif %}
+    app.use(express.static(webDist))
+{% else %}
+
+    // [Extend: mount /api/* routes here. This project has no UI capability —
+    // nothing is served statically, every response is JSON.]
+{% endif %}
+
+    return app
+}

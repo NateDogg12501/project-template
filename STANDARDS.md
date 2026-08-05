@@ -63,10 +63,18 @@ will tell you.
   it's made, not reconstructed later. Every generated `CLAUDE.md` includes
   a standing instruction to do this proactively each session.
 
-## Testing (once adopted per-project)
+## Testing
 
 - One test runner across the stack (vitest, matching CalculatorExample) —
   not jest-here-vitest-there.
+- **Every package with tests ships its own `vitest.config.js`**, even when
+  its contents are barely more than the defaults. Without one, vitest
+  searches upward and an unrelated parent config wins: the run reports "No
+  test files found" and exits 0, so CI passes having tested nothing.
+- A generated project's packages come with a passing suite and a committed
+  `package-lock.json` — `npm test` works in a fresh scaffold before anything
+  is set up by hand. CI runs `npm test`, not `npm test --if-present`: a
+  package with no test script is a defect to catch, not to skip.
 - The server re-validates whatever the client already validated — server
   is the trust boundary, client-side checks are convenience only.
 

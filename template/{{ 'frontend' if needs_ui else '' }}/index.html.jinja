@@ -8,6 +8,8 @@
 <body>
   <h1>{{ project_name }}</h1>
   <p>{{ description }}</p>
+  <!-- app.js writes into this; frontend/test/ asserts it is still here. -->
+  <p id="status"></p>
   <script src="app.js"></script>
 </body>
 </html>
