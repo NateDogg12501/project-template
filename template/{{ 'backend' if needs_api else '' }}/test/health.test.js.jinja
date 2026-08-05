@@ -1,0 +1,50 @@
+{% if needs_ui and needs_hosting %}
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+{% endif %}
+import request from 'supertest'
+import { expect, test } from 'vitest'
+
+import { createApp } from '../src/app.js'
+
+test('GET /api/health reports ok', async () => {
+    const response = await request(createApp()).get('/api/health')
+
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual({ status: 'ok' })
+})
+{% if needs_ui %}
+
+// The static mount is the application half of the frontend contract: when it
+// regresses the API stays healthy and every asset 404s, which nothing else
+// notices until the site is in front of someone.
+test('serves frontend/index.html at /', async () => {
+    const response = await request(createApp()).get('/')
+
+    expect(response.status).toBe(200)
+    expect(response.text).toContain('{{ project_name }}')
+})
+{% if needs_hosting %}
+
+// The other half: deployed, static files come from WEB_DIST, not the relative
+// path. This is the exact failure that reached production once already.
+test('serves static files out of WEB_DIST when it is set', async () => {
+    const webDist = mkdtempSync(path.join(tmpdir(), '{{ project_slug }}-web-'))
+    writeFileSync(path.join(webDist, 'probe.txt'), 'served from WEB_DIST')
+    const previous = process.env.WEB_DIST
+    process.env.WEB_DIST = webDist
+
+    try {
+        const response = await request(createApp()).get('/probe.txt')
+
+        expect(response.status).toBe(200)
+        expect(response.text).toBe('served from WEB_DIST')
+    } finally {
+        if (previous === undefined) delete process.env.WEB_DIST
+        else process.env.WEB_DIST = previous
+        rmSync(webDist, { recursive: true, force: true })
+    }
+})
+{% endif %}
+{% endif %}

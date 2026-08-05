@@ -48,10 +48,13 @@ You'll be asked for `project_name`, `description`, a preset (`flavor`:
 `core` or `prototype`), and then one question per capability — API, UI,
 HOSTED, DATABASE. The preset only moves those four defaults; you can
 override any of them. The generated repo is `git
-init`'d, given a first commit, and pushed to a new **private** GitHub repo
-(named after `project_slug`) under your authenticated `gh` account —
-automatically. Requires the [GitHub CLI](https://cli.github.com/) (`gh`)
-installed and authenticated (`gh auth login`) before you run `copier copy`.
+init`'d, has `npm install` run in each of its packages so the lock files land
+in the first commit, is committed, and is pushed to a new **private** GitHub
+repo (named after `project_slug`) under your authenticated `gh` account —
+automatically. Requires `npm` and the [GitHub CLI](https://cli.github.com/)
+(`gh`), authenticated (`gh auth login`), before you run `copier copy`. The
+result is a project whose `npm test` passes immediately, with no setup step
+between generating it and running it.
 
 ## Pull template updates into an already-generated project
 
@@ -99,12 +102,17 @@ Mechanically:
    `CLAUDE.md.jinja`, `.github/workflows/ci.yml.jinja`) stay inline
    `{% if needs_thing %}` blocks — a whole-file gate would mean two copies
    of a mostly identical file.
-4. Give it a job in `template/.github/workflows/ci.yml.jinja`, gated on the
-   same flag.
-5. **A capability can also ask its own questions** — any `copier.yml`
+4. Give it its own tests, inside its own gated path — and ship a
+   `vitest.config.js` alongside them if it's an npm package. Without one in
+   the package itself, vitest searches upward, may find an unrelated config,
+   and reports "No test files found" while exiting 0.
+5. Give it a job in `template/.github/workflows/ci.yml.jinja`, gated on the
+   same flag, running `npm test` (not `--if-present`, which is how a
+   capability with no tests stayed green for months).
+6. **A capability can also ask its own questions** — any `copier.yml`
    question accepts `when:`, the way `needs_datastore` only asks
    `when: "{{ needs_hosting }}"`.
-6. Log why it exists in `docs/decisions.md` (this repo's, not the
+7. Log why it exists in `docs/decisions.md` (this repo's, not the
    generated-project one) — see STANDARDS.md's "How standards get added."
 
 Then update `CopierAnswers` in

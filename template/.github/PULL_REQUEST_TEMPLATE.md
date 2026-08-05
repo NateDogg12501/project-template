@@ -4,7 +4,7 @@
 - [ ] Runs via `docker compose up -d --build` with no undocumented manual steps
 - [ ] FE and BE are separately runnable/testable (no accidental coupling)
 - [ ] Hosting, if any, is confirmed within AWS Always Free limits
-- [ ] Tests pass (`npm test`) — or explicitly noted as "no tests yet, tracked in docs/decisions.md"
+- [ ] `npm test` passes in every package that has one, and new behaviour arrived with a test
 - [ ] No secrets committed; anything sensitive is in SSM/`.env`, not source
 - [ ] `docs/decisions.md` updated if this PR includes a hard-to-reverse call
 - [ ] `/code-review` run and findings resolved or consciously deferred

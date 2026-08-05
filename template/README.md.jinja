@@ -17,6 +17,20 @@ see `.env.example`).
 This project has no server — open `frontend/index.html` in a browser.
 {% endif %}
 
+## Tests
+
+```bash
+{% if needs_api %}
+npm test --prefix backend
+{% endif %}
+{% if needs_ui %}
+npm test --prefix frontend
+{% endif %}
+```
+
+Dependencies were installed and the lock files committed when this project was
+scaffolded, so these work as-is. CI runs the same commands.
+
 {% if needs_hosting -%}
 ## Deployment
 

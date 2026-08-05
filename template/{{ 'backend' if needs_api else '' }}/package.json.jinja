@@ -7,10 +7,15 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "echo \"no tests yet — see docs/decisions.md\" && exit 0"{% if needs_hosting %},
+    "test": "vitest run",
+    "test:watch": "vitest"{% if needs_hosting %},
     "build:lambda": "node scripts/build-lambda.js"{% endif +%}
   },
   "dependencies": {
     "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "supertest": "^7.2.2",
+    "vitest": "^4.1.10"
   }
 }

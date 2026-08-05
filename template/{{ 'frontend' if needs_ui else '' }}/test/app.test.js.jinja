@@ -1,0 +1,48 @@
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import { beforeEach, expect, test{% if needs_api %}, vi{% endif %} } from 'vitest'
+
+// Importing app.js runs it, which is how it registers window.app — the same
+// thing the <script src="app.js"> tag does in a browser.
+import '../app.js'
+
+// The page under test is the real shipped index.html, not a fixture, so
+// renaming or dropping #status fails here rather than in a browser. Scripts
+// inserted via innerHTML never execute, so app.js still runs exactly once —
+// from the import above.
+//
+// path.join, not `new URL('../index.html', import.meta.url)`: under the jsdom
+// environment the global URL is jsdom's own, and node:fs rejects it.
+const indexHtml = readFileSync(path.join(import.meta.dirname, '..', 'index.html'), 'utf8')
+
+beforeEach(() => {
+    document.documentElement.innerHTML = indexHtml
+})
+
+test('index.html ships the #status element app.js writes into', () => {
+    expect(document.querySelector('#status')).not.toBeNull()
+})
+{% if needs_api %}
+
+test('renderHealth writes the backend status into #status', () => {
+    window.app.renderHealth(document, { status: 'ok' })
+
+    expect(document.querySelector('#status').textContent).toBe('Backend: ok')
+})
+
+test('checkHealth reads /api/health and renders what it returned', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ json: async () => ({ status: 'ok' }) })
+
+    await window.app.checkHealth(document, fetchImpl)
+
+    expect(fetchImpl).toHaveBeenCalledWith('/api/health')
+    expect(document.querySelector('#status').textContent).toBe('Backend: ok')
+})
+{% else %}
+
+test('render writes the static-build notice into #status', () => {
+    window.app.render(document)
+
+    expect(document.querySelector('#status').textContent).toContain('no backend')
+})
+{% endif %}

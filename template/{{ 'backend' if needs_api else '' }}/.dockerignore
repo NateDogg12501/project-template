@@ -1,0 +1,6 @@
+# Dockerfile runs `npm install --omit=dev` and then `COPY . .`; without this
+# the host's node_modules (dev dependencies and all) would be copied straight
+# over the production-only tree that was just installed.
+node_modules
+test
+vitest.config.js

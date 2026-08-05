@@ -166,7 +166,9 @@ the application half behind.
 `python3` on PATH (inherited from the `v1.1.0` module's zip script).
 `build-lambda.js` copies an explicit list of `frontend/` files, so any new
 static asset must be added there or it will 404 in production only — called
-out in the generated `terraform/README.md`. The script falls back to `npm
+out in the generated `terraform/README.md`. **Superseded 2026-08-04:** that
+allowlist is a denylist now; see the entry at the bottom of this file. The
+rest of this entry stands. The script falls back to `npm
 install` with a warning when no `package-lock.json` exists yet (a fresh
 scaffold has none), so builds are only reproducible once that lock is
 committed.
@@ -197,6 +199,9 @@ an unremarkable gap. The UI capability now has a `frontend` CI job; it is
 deliberately minimal (`node --check` on every shipped script) because
 `frontend/` has no test runner yet, and the job is there so the *next* change
 adds tests to a job that exists rather than inventing one.
+**Amended 2026-08-04:** that next change happened, and the bet paid — adding
+vitest to UI was an edit to an existing job rather than an argument about
+whether the frontend deserved one.
 **Why keep the `needs_*` question names rather than renaming to `cap_api` etc.:**
 three generated projects carry `.copier-answers.yml` files recording
 `needs_hosting`/`needs_datastore`. Renaming would orphan those answers, and
@@ -420,3 +425,86 @@ artifacts — at architect time no project exists yet, so the needs-decision fil
 *is* the record; `docs/decisions.md` is where the reasoning lands once there is
 a project to put it in. Read "logged in `docs/decisions.md`" as naming the
 obligation to write the decision down, not that one filename at every stage.
+
+## 2026-08-04: Every capability ships a real test suite, its own `vitest.config.js`, and a committed lock file
+**Context:** the capability contract above says a capability owns its files,
+its tests, and its CI job — but neither shipping capability actually had tests.
+`backend/package.json` carried `"test": "echo \"no tests yet\" && exit 0"` and
+the `backend` CI job ran `npm test --if-present`, so the API job was green by
+construction. The `frontend` job was `node --check`, chosen honestly at the
+time because `frontend/` had no runner at all. Separately,
+`idea-workflow-example-1` hit a **silent** vitest failure: with no
+`vitest.config.js` in the package, vitest searched upward, found a config
+belonging to an unrelated parent directory, and reported "No test files found"
+while exiting 0.
+**Decision:** API ships a supertest suite against `/api/health` and the static
+mount; UI ships a jsdom suite driving the real `frontend/index.html`. Each
+package gets its own `vitest.config.js` — including `frontend/`, which is now
+an npm package rather than three loose files. CI runs plain `npm test` in both,
+not `--if-present`. And `_tasks` runs `npm install` in each generated package
+*before* the first commit, so `package-lock.json` is in it.
+**Why real assertions rather than a placeholder test:** a placeholder proves
+nothing about the part that actually costs time later — config discovery,
+supertest setup, import paths, which DOM globals exist. Those are wrong or
+right on day one and stay that way; the second person to write a test in a
+generated project should be adding a case to a working harness, not debugging
+one. The suites are small but every assertion is load-bearing: the backend's
+`WEB_DIST` test is the exact failure that reached production in
+`idea-workflow-example-1`, and the frontend's tests parse the real shipped
+`index.html` so renaming `#status` fails in CI rather than in a browser.
+**Why ship `vitest.config.js` when its contents are near-default:** because the
+failure it prevents is silent. A missing config does not error; it produces a
+green run that tested nothing, which is strictly worse than a red one. Both
+files carry a comment saying so, since "this file is basically empty" is
+exactly the reasoning that would delete them. (The upward search itself is a
+vitest behaviour we are only working around here — fixing the root cause,
+i.e. not leaving stray configs above generated projects, is separate.)
+**Why `npm install` moved into `_tasks`:** both npm CI jobs use `npm ci`, which
+fails outright without a lock file, and a scaffolded project should be able to
+run its own tests before anyone reads the README. That does put build work in
+`_tasks`, which the path-name-gating entry above had reduced to git/gh work —
+the distinction that matters there is that tasks must not *prune* files, since
+tasks don't run on `copier update`. Installing does not prune, and a project
+being updated already has its lock files.
+**Why the frontend stayed a classic `<script>` rather than becoming an ES
+module:** modules would have made the test's import path prettier, but
+`file://` refuses module imports, and a UI-only project's README tells you to
+open `frontend/index.html` in a browser. `app.js` hangs its functions off
+`window` instead, which works unchanged in the browser and under vitest's
+jsdom environment (where `window` is the module global). The template's
+zero-build-step commitment is what makes this the cheap option; a project that
+grows a bundler should revisit it.
+**Consequence:** `copier copy` now needs `npm` and network access before its
+first commit, alongside the existing `gh` dependency — a failure there leaves
+the project generated but uncommitted, before any remote is touched. Generated
+`backend/` gained a `.dockerignore`, because `Dockerfile`'s `COPY . .` would
+otherwise copy the host's dev-dependency `node_modules` over the production
+install it just did. And `frontend/` now contains files that must not be
+deployed, which is what forced the next entry.
+
+## 2026-08-04: `build-lambda.js` excludes a fixed set from `frontend/` instead of listing what to include
+**Context:** the script copied `['index.html', 'app.js', 'styles.css']` by
+name. Adding a static asset and forgetting to add it to that list produces a
+file that works locally — where it is served straight off disk — and 404s only
+in production. The hazard was documented in two places (the generated
+`terraform/README.md` had an "Adding static assets" section about it, and so
+did this log). Needing two warnings for one list is a statement about the
+design, not about the documentation.
+**Decision:** copy `frontend/` wholesale minus a known set — `node_modules`,
+`package.json`, `package-lock.json`, `test`, `vitest.config.js` — matched
+against top-level entries only.
+**Why this fails the safe way:** the allowlist's failure mode is a missing
+asset discovered in production; the denylist's is an extra file in the bundle,
+discovered by looking. More importantly the two lists grow differently: an
+allowlist grows with every asset a project adds, forever, in every project,
+while the exclusions are the frontend package's own tooling — a fixed set that
+changes only when the *template* changes.
+**Why top-level only:** the excluded names are things that live directly in
+`frontend/`. Matching them at any depth would mean a project's `img/test/`
+directory of fixtures-shaped assets silently doesn't deploy, which is the
+allowlist's failure mode wearing a different hat.
+**Consequence:** anything left in `frontend/` gets published — a scratch file,
+a stray export, an API key someone parked there. That is the trade being made:
+visible clutter over invisible absence. If the frontend ever grows a build
+step, the right move is not to extend this list but to copy the build output
+directory instead, at which point the question disappears.

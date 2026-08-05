@@ -10,8 +10,8 @@ preset `{{ flavor }}`. Capabilities this project was generated with:
 
 | Capability | On? | What it brings here |
 |---|---|---|
-| API | {% if needs_api %}yes{% else %}no{% endif %} | {% if needs_api %}`backend/`, `docker-compose.yml`, `scripts/setup-worktree-env.js`, the `backend` CI job{% else %}— (no server; nothing serves `frontend/`){% endif %} |
-| UI | {% if needs_ui %}yes{% else %}no{% endif %} | {% if needs_ui %}`frontend/`, the `frontend` CI job{% else %}— (API-only project){% endif %} |
+| API | {% if needs_api %}yes{% else %}no{% endif %} | {% if needs_api %}`backend/` (incl. `backend/test/`), `docker-compose.yml`, `scripts/setup-worktree-env.js`, the `backend` CI job{% else %}— (no server; nothing serves `frontend/`){% endif %} |
+| UI | {% if needs_ui %}yes{% else %}no{% endif %} | {% if needs_ui %}`frontend/` (incl. `frontend/test/`), the `frontend` CI job{% else %}— (API-only project){% endif %} |
 | HOSTED | {% if needs_hosting %}yes{% else %}no{% endif %} | {% if needs_hosting %}`terraform/`, `backend/scripts/build-lambda.js`, the `terraform` CI job{% else %}— (local-only){% endif %} |
 | DATABASE | {% if needs_datastore %}yes{% else %}no{% endif %} | {% if needs_datastore %}the DynamoDB module + IAM policy in `terraform/`, covered by the `terraform` CI job{% else %}— (no persistent store){% endif %} |
 
@@ -31,9 +31,16 @@ most needs to know before touching this repo.]
 
 ```bash
 {% if needs_api %}
-docker compose up -d --build   # full app locally
+docker compose up -d --build           # full app locally
+npm test --prefix backend              # API tests (vitest + supertest)
 {% endif %}
-# [fill in: dev commands, test commands, build commands]
+{% if needs_ui %}
+npm test --prefix frontend             # UI tests (vitest + jsdom)
+{% endif %}
+{% if needs_hosting %}
+npm run build:lambda --prefix backend  # stage dist-lambda/ for terraform apply
+{% endif %}
+# [fill in: anything else — dev servers, data loading, one-off scripts]
 ```
 
 ## Architecture invariants
@@ -44,9 +51,27 @@ validation is convenience only, every write is re-validated server-side."]
 
 ## Testing conventions
 
-[What's tested, what's deliberately not yet, how to run each layer. See
-STANDARDS.md — vitest is the default choice across this pipeline, and every
-capability owns its own tests and CI job.]
+vitest, one runner across the stack. Each package runs its own tests from its
+own directory, against its own `vitest.config.js` — **don't delete those config
+files because they look nearly empty.** Without one, vitest searches upward,
+can pick up an unrelated config, and then reports "No test files found" while
+exiting 0: a green run that tested nothing.
+
+What ships with the scaffold, all of it real and all of it passing:
+{% if needs_api %}
+
+- `backend/test/` — vitest + supertest against `createApp()` from
+  `src/app.js`. `src/index.js` is the only place that binds a port, so tests
+  build an app without starting a server; keep that split when you add routes.
+{% endif %}
+{% if needs_ui %}
+
+- `frontend/test/` — vitest with the jsdom environment, driving the real
+  `index.html` rather than a fixture, so a change to the markup that breaks
+  `app.js` fails here.
+{% endif %}
+
+[Expand: what's tested beyond the smoke tests, and what's deliberately not.]
 
 ## Gotchas
 
