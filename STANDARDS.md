@@ -183,6 +183,14 @@ requires HOSTED, contributes only blocks inside `terraform/`, and is
 therefore covered by HOSTED's `terraform` job. A capability riding another's
 job must say so where the job is defined.
 
+Not every job belongs to a capability, though — `ci.yml.jinja` also has
+**ungated jobs owned by the template itself**, for files every project gets
+whatever its capabilities are. `claude-md` (which fails the build while
+`CLAUDE.md` still holds skeleton placeholders) is the one that exists today.
+An ungated job needs that justification: it is for content that renders
+unconditionally, and there is genuinely no flag to gate it on. "I couldn't
+decide which capability owns it" is not that justification.
+
 **Why the three-part rule and not just "files":** the template shipped a
 `frontend/` for months that no CI job ever touched, because nothing forced
 the files and the job to arrive together. Files are the part you notice

@@ -508,3 +508,46 @@ a stray export, an API key someone parked there. That is the trade being made:
 visible clutter over invisible absence. If the frontend ever grows a build
 step, the right move is not to extend this list but to copy the build output
 directory instead, at which point the question disappears.
+
+## 2026-08-04: CI fails a generated project whose `CLAUDE.md` still has skeleton placeholders
+**Written after the fact.** The gate shipped in `b0f63d5` (PR #5) without an
+entry here, which the "How standards get added" rule requires; this
+reconstructs the reasoning from that commit and PR rather than from the session
+that made the call, so treat the *why nots* below as re-derived rather than
+recorded.
+**Context:** `template/CLAUDE.md.jinja` ships seven bracketed prompts —
+`[Expand: what stack...]`, `[Things that must stay true...]`, and so on — that
+a project is supposed to replace with real content. Nothing checked. A project
+could therefore reach production with the skeleton intact, which is worse than
+having no `CLAUDE.md`: an empty file tells you nothing, while a file full of
+instructions addressed to whoever scaffolded the project reads, to a later
+session, like a description of the project itself.
+**Decision:** an unconditional `claude-md` job in the generated
+`.github/workflows/ci.yml` greps `CLAUDE.md` for the skeleton's literal
+bracketed phrases and fails the build if any survive.
+**Why unconditional rather than owned by a capability:** every other job in
+that workflow is gated on a capability flag, per the contract above.
+`CLAUDE.md.jinja` renders for every project regardless of which capabilities
+are on, so there is no flag to gate this on — the job belongs to the template
+itself. That makes it the second documented exception to "a capability owns its
+CI job" (the first being DATABASE riding HOSTED's `terraform` job), and worth
+naming as one so a future reader doesn't take it as precedent for ungated jobs
+generally.
+**Why matching literal skeleton phrases rather than any `[...]`:** a general
+bracket match would fire on every markdown link and every array literal in a
+fenced block, which is most of a filled-in `CLAUDE.md`. The cost is coupling:
+the grep pattern in `ci.yml.jinja` and the placeholder wording in
+`CLAUDE.md.jinja` are one thing split across two files, and changing a
+placeholder's opening words without changing the pattern silently disables the
+check for that section. This was hit immediately — the very next change
+replaced the `[What's tested...]` placeholder in Testing conventions with real
+content plus an `[Expand: ...]` prompt, which happens to still match. It
+matched by luck, not by design.
+**What it does not catch:** deleting a section outright instead of filling it
+in, and filling a section with text that is technically not the placeholder but
+says nothing. It checks that the skeleton was *touched*, not that what replaced
+it is true — which is the honest limit of any grep-shaped gate on prose.
+**Consequence:** a generated project's CI is red from its first push until
+someone fills the file in. That is the intended pressure, and it is why the job
+has to stay ungated: the moment it is conditional on something, the condition
+becomes the way out of it.
