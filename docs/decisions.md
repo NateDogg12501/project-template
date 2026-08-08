@@ -551,3 +551,38 @@ it is true — which is the honest limit of any grep-shaped gate on prose.
 someone fills the file in. That is the intended pressure, and it is why the job
 has to stay ungated: the moment it is conditional on something, the condition
 becomes the way out of it.
+
+## 2026-08-05: "Prompts are product, not config" promoted into STANDARDS.md
+**Context:** `idea-workflow`'s CLAUDE.md carried this as a local architecture
+invariant. It is the sharpest framing anywhere in the pipeline for a problem
+that is not specific to that repo — and STANDARDS.md, which is where rules
+every project inherits live, said nothing about prompts at all. As more
+projects lean on agent-facing files, the rule was in the one place least likely
+to be read by whoever needs it next.
+**Decision:** Promoted it to a subsection under Documentation, keeping
+`idea-workflow`'s wording as the anchor and adding the distinction that makes
+the rule non-obvious: the three documents above it (`README.md`, `CLAUDE.md`,
+`docs/decisions.md`) are read *opportunistically*, by an agent that happens to
+be in the repo, while a prompt is injected *deterministically*, every run.
+Same file format, entirely different blast radius — which is why one gets PR
+review and the others get a standing instruction.
+**Why the `assumptions` example specifically:** an abstract rule about prompt
+discipline is easy to nod at and ignore. That line is a case where deleting one
+sentence leaves every mechanical signal green — `parsePlan` still validates
+since `assumptions` is optional, tests pass, a plan still posts and still
+builds — while silently disabling the Spec Review gate, since a human cannot
+catch a guess the architect stopped reporting. It makes "fails plausibly"
+concrete instead of theoretical.
+**Why not also demand prompt evals:** the honest state is that judging a prompt
+means a human reading output from tickets whose good result they already know.
+Writing "add evals" into a standard nobody is resourced to satisfy produces a
+rule that gets skipped, which devalues the rest of the file. The standard asks
+for what is actually done today: PR review, no mid-run edits, and a decisions
+entry when the agent's purpose changes. `orchestrator/test/architect-prompt.test.ts`
+is cited as the counterpart that *can* be automated — it pins the untrusted-data
+fence's position, the tag vocabulary matching what the code exports, and plan
+version consistency. Structure, not quality; the standard says so explicitly so
+nobody mistakes a green suite for a good prompt.
+**Consequence:** any future repo in this pipeline that ships agent-facing
+prompt files inherits this rule, and STANDARDS.md now has an opinion about a
+fourth documentation layer it previously did not name.

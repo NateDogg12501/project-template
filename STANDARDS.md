@@ -124,6 +124,51 @@ that stage. Both refuse to proceed silently; both hand the call to a human.
   it's made, not reconstructed later. Every generated `CLAUDE.md` includes
   a standing instruction to do this proactively each session.
 
+### Prompts are product, not config
+
+A file whose contents *become* an agent's instructions — `idea-workflow`'s
+`orchestrator/prompts/*.md` today, anything like it later — is a **product
+surface**. Treat a change to one the way you'd treat a change to a feature,
+not the way you'd treat bumping a timeout.
+
+The difference is what a mistake does. Get config wrong and it breaks where
+you can see it: a bad port refuses connections, a bad path throws `ENOENT`.
+Get a prompt wrong and everything still runs. Tests pass, CI is green, output
+arrives well-formatted and confident. It is simply worse, and nothing says so.
+
+(This is also what separates prompts from the three documents above. Those are
+read *opportunistically*, by an agent that happens to be working in the repo.
+A prompt is injected *every single time*, deterministically. Same file format,
+completely different blast radius.)
+
+Concretely — `architect.md` currently contains this line:
+
+> `assumptions` — everything you decided that the ticket did not say. This is
+> the most valuable field you write; it is where a human catches you being
+> wrong while it is still cheap. An empty list on a vague ticket is a mistake.
+
+Delete that sentence and nothing fails. `parsePlan` still validates
+(`assumptions` is optional, defaulting to `[]`), every test still passes, a
+plan still reaches Jira and still builds. What is gone is the architect
+telling you what it guessed — so Spec Review, whose whole job is catching a
+wrong guess while it is still cheap, quietly stops being able to. No error, no
+alert; just worse builds a month later with no traceable cause.
+
+So:
+
+- **Change them in a PR, reviewed like code** — never edited in place mid-run.
+- **Never "just tweak it" to rescue one bad build.** That is a product release
+  with a sample size of one.
+- **Judge them by running them**, against tickets whose good output you
+  already know. There is no unit test for a prompt; the assertion is a human
+  reading results. (Tests can still pin the mechanical parts — that a required
+  section exists, that the untrusted-data fence is last — and
+  `orchestrator/test/architect-prompt.test.ts` does exactly that. Those guard
+  structure, not quality.)
+- **Log the reasoning in `docs/decisions.md`** when a change alters what the
+  agent is *for*. With prompts the wording is the whole artifact, so why it is
+  worded that way is the only thing a future reader has to go on.
+
 ## Testing
 
 - One test runner across the stack (vitest, matching CalculatorExample) —
