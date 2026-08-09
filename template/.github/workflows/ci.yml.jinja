@@ -55,6 +55,9 @@ jobs:
 {% endif %}
 {% if needs_hosting %}
 
+  # HOSTED owns this job. DATABASE has no job of its own — it contributes only
+  # blocks inside `terraform/` and rides this one; see STANDARDS.md's "The
+  # contract: a capability owns its files, its tests, and its CI job".
   terraform:
     runs-on: ubuntu-latest
     defaults:
@@ -63,7 +66,54 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
+      # `-recursive` is what reaches bootstrap/ — a bare `fmt` reads one
+      # directory. Before any `init`, so it never formats fetched module code.
+      - run: terraform fmt -check -recursive
+      - name: Terraform derives from terraform-modules
+        # Every module source must be a tag-pinned reference to the shared
+        # module repo: a root config wires pinned modules together, it does not
+        # declare AWS resources of its own. See STANDARDS.md's "Hosting".
+        #
+        # Runs before `init` and excludes `.terraform/` — the modules Terraform
+        # fetches have `source = "hashicorp/aws"` lines of their own, and
+        # grepping upstream code is not the job.
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          modules='source[[:space:]]*=[[:space:]]*"git::https://github\.com/NateDogg12501/terraform-modules\.git//modules/[a-z0-9-]+\?ref=v[0-9]+\.[0-9]+\.[0-9]+"[[:space:]]*(#.*)?$'
+          # A registry *module* source is NAMESPACE/NAME/PROVIDER; two segments
+          # can only be a provider, so this excludes `required_providers`
+          # without needing to know which block a line sits in — and a real
+          # registry module source still fails.
+          providers='source[[:space:]]*=[[:space:]]*"[a-z0-9-]+/[a-z0-9-]+"[[:space:]]*(#.*)?$'
+          # `grep -r --include`, not a shell glob: Actions' bash has globstar
+          # off, so `terraform/**/*.tf` collapses to `terraform/*/*.tf` — it
+          # would find bootstrap/main.tf and miss main.tf and backend.tf.
+          # The `|| true`s are load-bearing: grep exits 1 on no match, which
+          # under `pipefail` includes the *success* case of the filters below.
+          found=$(grep -rnE '^[[:space:]]*source[[:space:]]*=' --include='*.tf' --exclude-dir=.terraform . || true)
+          # A grep that matches nothing is otherwise green. Every hosted project
+          # has at least module "app" and module "tf_state", so zero pinned
+          # sources means this check has stopped looking in the right place.
+          if ! printf '%s\n' "$found" | grep -qE "$modules"; then
+            echo "::error::found no tag-pinned terraform-modules source at all — this check is looking in the wrong place, or matching the wrong shape. A gate that can only pass is not a gate."
+            exit 1
+          fi
+          bad=$(printf '%s\n' "$found" | grep -vE "$modules" | grep -vE "$providers" || true)
+          if [ -n "$bad" ]; then
+            printf '%s\n' "$bad"
+            echo "::error::every module source must be git::https://github.com/NateDogg12501/terraform-modules.git//modules/<name>?ref=vX.Y.Z — see STANDARDS.md, \"Hosting\""
+            exit 1
+          fi
       - run: terraform init -backend=false
       - run: terraform validate
-      - run: terraform fmt -check
+      # `terraform validate` does not recurse — bootstrap/ is a separate root
+      # config with its own state and needs its own init+validate. `cd` rather
+      # than a step-level `working-directory:`, whose resolution relative to the
+      # job default is not worth depending on.
+      - name: init + validate bootstrap
+        run: |
+          cd bootstrap
+          terraform init -backend=false
+          terraform validate
 {% endif -%}

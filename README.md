@@ -111,7 +111,12 @@ Mechanically:
    capability with no tests stayed green for months).
 6. **A capability can also ask its own questions** — any `copier.yml`
    question accepts `when:`, the way `needs_datastore` only asks
-   `when: "{{ needs_hosting }}"`.
+   `when: "{{ needs_hosting }}"`, and HOSTED's `state_bucket_name` /
+   `aws_region` do the same. Two things about a skipped question: it still
+   resolves to its rendered default, so no template can hit an undefined
+   variable — but it gets **no line in `.copier-answers.yml`**. Turning the
+   capability on later therefore recomputes those answers from their defaults,
+   silently, unless they're written into the answers file in the same edit.
 7. Log why it exists in `docs/decisions.md` (this repo's, not the
    generated-project one) — see STANDARDS.md's "How standards get added."
 

@@ -586,3 +586,130 @@ nobody mistakes a green suite for a good prompt.
 **Consequence:** any future repo in this pipeline that ships agent-facing
 prompt files inherits this rule, and STANDARDS.md now has an opinion about a
 fourth documentation layer it previously did not name.
+
+## 2026-08-08: Generated projects keep Terraform state in S3, bootstrapped by a separate root config
+**Context:** generated `terraform/` had no backend block at all — implicit local
+state, in one person's working copy. No locking, no history, and one lost or
+clobbered file between the project and a Lambda, a Function URL, a log group and
+(with DATABASE) a table that Terraform can then neither see nor destroy. The
+piece that was missing was a bucket to put state in that didn't violate the
+Always Free standard; `terraform-modules` v2.1.0 added `s3-bucket`, and S3's
+Free Tier stopped expiring after 12 months in mid-2024 (5GB storage, 20,000 GET,
+2,000 PUT per month, perpetual), which is what makes a state bucket free at all.
+**Decision:** `terraform/backend.tf` holds a `backend "s3"` block (`key =
+"terraform.tfstate"`, `encrypt = true`, `use_lockfile = true`). The bucket it
+points at is created by `terraform/bootstrap/`, a separate root config with
+local state whose entire content is a `module "tf_state"` call to `s3-bucket` at
+its defaults. `required_version` goes `>= 1.5` → `>= 1.10`. Two new
+HOSTED-gated `copier.yml` questions supply the two values a backend block
+cannot compute: `state_bucket_name` (default `{{ project_slug }}-tfstate`) and
+`aws_region`.
+**Why a separate bootstrap config, not one config doing both:** the
+chicken-and-egg has exactly one other answer — apply the bucket with local
+state, then `terraform init -migrate-state` the same config onto the backend it
+just created. That works once, per environment, if done in the right order, and
+leaves the config *containing its own state bucket*: `terraform destroy` then
+tries to delete the bucket holding the state of the destroy. A directory nobody
+has to touch again beats a ritual nobody performs twice.
+**Why `use_lockfile` and not a DynamoDB lock table:** the lock table is a second
+always-free resource, a second thing to name, and a second thing to forget at
+teardown — and it would spend 5/5 of the 25 RCU/WCU allowance that is shared
+per account+region across every project. `dynamodb_table` on the S3 backend is
+deprecated in favour of native locking anyway. The cost is the `>= 1.10` floor,
+which CI does not feel (`setup-terraform` installs latest) and which only shows
+up on a contributor's laptop.
+**Why the same two values are literals in two files:** backend blocks cannot
+interpolate — not `var.`, not locals, not `${}`. Copier is the only layer that
+can put one answer in two places, which is exactly what a template is for. The
+alternative, a partial backend plus a gitignored `-backend-config` file, moves
+the values out of version control to avoid duplicating them.
+**Why bumping `lambda-web-app` and `dynamodb-single-table` v1.2.0 → v2.1.0
+needs no `terraform import`:** the single-tag rule below drags them along, since
+`s3-bucket` only exists at v2.1.0. v2.0.0 is breaking *only* for an environment
+already deployed on v1.x, where Lambda auto-created the CloudWatch log group the
+module now declares and the first apply hits `ResourceAlreadyExistsException`. A
+freshly generated project has applied nothing, so there is no group to adopt.
+v2.0.0 adds no required variables: `retention_in_days` defaults to 14, and
+`dynamodb-single-table`'s new `cost_acknowledged` defaults to false with a
+precondition the template's configuration (PROVISIONED, 5/5, no GSIs) never
+trips. Incidentally this makes STANDARDS.md's claim about `lambda-web-app`
+setting a 14-day retention default true of what the template actually pins,
+which at v1.2.0 it was not.
+**Why bootstrap's state stays local and gitignored:** committing state to git
+for the sake of one bucket teaches the habit for the case where state does hold
+secrets, and puts a lineage/serial JSON blob in the merge path.
+`.gitignore`'s patterns are unanchored, so `terraform/bootstrap/terraform.tfstate`
+was already ignored before this change; what was *not* ignored, and now is, is
+`errored.tfstate` — the full state Terraform dumps beside the config when a
+*remote* push fails, which only became possible with a remote backend.
+**Consequence:** a hosted project's first deploy is two applies, in order.
+`terraform init` in `terraform/` fails with `NoSuchBucket` until bootstrap has
+run — recoverable, nothing half-done. Teardown is now asymmetric and order
+matters: destroy `terraform/` first, and the state bucket deliberately survives
+`terraform destroy` (`force_destroy = false` plus versioning, so emptying it is
+an affirmative act). Destroying that bucket while `terraform/`'s state is in it
+strands everything the state described, and nothing fails loudly when you do.
+Losing bootstrap's local state breaks nothing deployed, but re-applying it fails
+`BucketAlreadyOwnedByYou`; recovery is importing the module's eight resources
+(`module.tf_state.aws_s3_bucket.this`, `_versioning`,
+`_server_side_encryption_configuration`, `_ownership_controls`,
+`_public_access_block`, `_lifecycle_configuration.this[0]` — `count`-gated —
+and `_policy.require_tls`), all keyed on the bucket name; or leaving the bucket
+unmanaged, which costs nothing until you need to change it. Every hosted project
+now has two `.terraform/` trees and downloads the AWS provider twice. `terraform
+validate` locally needs `-backend=false`, since a plain `init` now contacts S3.
+State history is bounded at 90 days by the module's noncurrent-version expiry —
+recovery from a bad apply last week, not an audit trail from last year. And a
+project generated before this change needs a bootstrap apply plus `init
+-migrate-state`. Its `copier update` is otherwise clean — verified end to end
+against a tagged pre-change template — with one exception, which is the one that
+matters: a project that hand-edited `terraform/variables.tf`'s region gets a
+merge conflict there, because this change adds a comment to that file. The
+conflict lands exactly where the trap is, since such a project also has
+`aws_region` recomputed to `us-east-1` in `.copier-answers.yml` (a `when`-skipped
+question resolves to its default but records nothing), and would otherwise end up
+with resources in one region and state in another. Set that key in the answers
+file before updating.
+
+## 2026-08-08: All Terraform in a generated project derives from terraform-modules, checked in CI
+**Context:** STANDARDS.md already asked for the shared modules "rather than
+hand-writing Lambda/DynamoDB resources again" — a preference, in prose,
+unenforced, and scoped to the two resource kinds that happened to exist when it
+was written. The state bucket was the first real test of it, and it is precisely
+the case where hand-writing is easier: eight resources, one of them an IAM
+policy document, versus a change in another repo plus a tag release. A rule that
+loses that trade every time it is tested is not a rule.
+**Decision:** generalise the bullet to all Terraform — a root config wires
+pinned modules together and does not declare AWS resources of its own — add the
+rule that one project pins one tag across its whole config, and enforce the
+mechanical half in the generated `terraform` CI job: a `source =` in any `*.tf`
+that is not a tag-pinned `terraform-modules` reference fails the build.
+**Why not ban `resource "aws_…"` outright:** `aws_iam_role_policy.app_table_access`
+exists on purpose. The modules deliberately leave cross-module IAM to the
+caller, because the module owning the role cannot know what will sit beside it
+and the module owning the table cannot attach to a role it does not own.
+Banning resource blocks therefore means an allowlist of permitted types, per
+project, that someone maintains and that gets widened under deadline pressure.
+Sources are the half with one right answer, so that is the half automated, and
+the carve-out is named in STANDARDS.md rather than pretended away. The
+allowlist check stays available if a project actually drifts.
+**Why the check fails when it finds no pinned source:** the two worst
+regressions in this pipeline were both green checks that verified nothing — a
+vitest run reporting "No test files found" and exiting 0, and `npm test
+--if-present` on a package with no test script. A grep-shaped gate degrades the
+same way, silently, on any rename or path change. Requiring at least one match
+is safe because every hosted project has `module "app"` and `module "tf_state"`.
+**Why provider sources are allowlisted by shape rather than by position:** a
+registry module source is `NAMESPACE/NAME/PROVIDER`; a provider shorthand is
+`NAMESPACE/NAME`. Two segments can only be a provider, so the pattern needs no
+notion of which block a line sits inside — and a genuine registry module source
+still fails, which is the intent.
+**Consequence:** adding an AWS resource to a generated project now starts in
+another repo and ends in a tag release. That is deliberately more expensive than
+writing a resource block, and it is the point: the resource ends up somewhere
+the next project inherits it, with the gotcha already solved. The check hardcodes
+`terraform-modules`' clone URL and its `?ref=vX.Y.Z` shape — which
+idea-workflow's module preflight also parses — so renaming or moving that repo
+breaks the CI of every generated project at once. And it is a format check: it
+cannot tell that a pinned module is the *right* module, and it cannot see a
+hand-written resource at all.

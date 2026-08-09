@@ -7,3 +7,6 @@ dist-lambda.zip
 terraform.tfstate
 terraform.tfstate.backup
 *.tfvars
+# Written locally, holding the full state, when a *remote* state push fails.
+errored.tfstate
+.terraform.tfstate.lock.info

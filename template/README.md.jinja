@@ -37,16 +37,23 @@ scaffolded, so these work as-is. CI runs the same commands.
 Deployed to AWS Lambda (Function URL, no API Gateway/ALB) behind the
 [`lambda-web-app`](https://github.com/NateDogg12501/terraform-modules/tree/main/modules/lambda-web-app)
 Terraform module{% if needs_datastore %}, with data in DynamoDB via
-[`dynamodb-single-table`](https://github.com/NateDogg12501/terraform-modules/tree/main/modules/dynamodb-single-table){% endif %}.
+[`dynamodb-single-table`](https://github.com/NateDogg12501/terraform-modules/tree/main/modules/dynamodb-single-table){% endif %},
+and Terraform state in S3 via
+[`s3-bucket`](https://github.com/NateDogg12501/terraform-modules/tree/main/modules/s3-bucket).
 Stays inside AWS Always Free.
 
 ```bash
-cd terraform
-terraform init
+cd terraform/bootstrap    # once per project: creates the S3 state bucket
+terraform init && terraform apply
+
+cd .. && terraform init   # against that bucket
 terraform apply
 ```
 
-See `terraform/README.md` for required SSM parameters before the first apply.
+The first two lines are once per project, not once per deploy — after that,
+deploying is `terraform apply` in `terraform/`. See `terraform/README.md` for the
+SSM parameters needed before the first apply, and for what to do if `terraform
+init` says `NoSuchBucket`.
 {% else -%}
 ## Deployment
 
