@@ -1,0 +1,20 @@
+# State lives in S3, in the bucket `bootstrap/` creates. Run that config once
+# before the first `terraform init` here — until then init fails with
+# NoSuchBucket, having changed nothing.
+#
+# Backend blocks cannot interpolate: no `var.`, no locals, no `${}`. So the
+# bucket name and region are literals rendered by Copier from
+# `state_bucket_name` and `aws_region`, the same answers bootstrap/main.tf
+# renders. Changing one means changing both.
+#
+# `use_lockfile` is S3-native state locking — no DynamoDB lock table. It needs
+# Terraform >= 1.10, which main.tf's `required_version` pins.
+terraform {
+  backend "s3" {
+    bucket       = "{{ state_bucket_name }}"
+    key          = "terraform.tfstate"
+    region       = "{{ aws_region }}"
+    encrypt      = true
+    use_lockfile = true
+  }
+}

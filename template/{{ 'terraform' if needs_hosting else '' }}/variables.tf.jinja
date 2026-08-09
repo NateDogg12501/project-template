@@ -1,4 +1,6 @@
+# Also rendered as a literal into backend.tf's `region` — backend blocks cannot
+# interpolate. Overriding this at the CLI moves the resources, not the state.
 variable "aws_region" {
   type    = string
-  default = "us-east-1"
+  default = "{{ aws_region }}"
 }

@@ -12,7 +12,7 @@ preset `{{ flavor }}`. Capabilities this project was generated with:
 |---|---|---|
 | API | {% if needs_api %}yes{% else %}no{% endif %} | {% if needs_api %}`backend/` (incl. `backend/test/`), `docker-compose.yml`, `scripts/setup-worktree-env.js`, the `backend` CI job{% else %}— (no server; nothing serves `frontend/`){% endif %} |
 | UI | {% if needs_ui %}yes{% else %}no{% endif %} | {% if needs_ui %}`frontend/` (incl. `frontend/test/`), the `frontend` CI job{% else %}— (API-only project){% endif %} |
-| HOSTED | {% if needs_hosting %}yes{% else %}no{% endif %} | {% if needs_hosting %}`terraform/`, `backend/scripts/build-lambda.js`, the `terraform` CI job{% else %}— (local-only){% endif %} |
+| HOSTED | {% if needs_hosting %}yes{% else %}no{% endif %} | {% if needs_hosting %}`terraform/` (incl. `terraform/bootstrap/`, which creates the S3 state bucket), `backend/scripts/build-lambda.js`, the `terraform` CI job{% else %}— (local-only){% endif %} |
 | DATABASE | {% if needs_datastore %}yes{% else %}no{% endif %} | {% if needs_datastore %}the DynamoDB module + IAM policy in `terraform/`, covered by the `terraform` CI job{% else %}— (no persistent store){% endif %} |
 
 **Turning a capability on later is a `copier update`, not a hand-build.** Edit
@@ -39,6 +39,8 @@ npm test --prefix frontend             # UI tests (vitest + jsdom)
 {% endif %}
 {% if needs_hosting %}
 npm run build:lambda --prefix backend  # stage dist-lambda/ for terraform apply
+# Once per project, before the first `terraform init` in terraform/:
+terraform -chdir=terraform/bootstrap init && terraform -chdir=terraform/bootstrap apply
 {% endif %}
 # [fill in: anything else — dev servers, data loading, one-off scripts]
 ```
@@ -48,6 +50,33 @@ npm run build:lambda --prefix backend  # stage dist-lambda/ for terraform apply
 [Things that must stay true — the "if you change X you must also change Y"
 rules. Example shape: "`backend/` is the trust boundary — the frontend's
 validation is convenience only, every write is re-validated server-side."]
+{% if needs_hosting %}
+
+### Terraform derives from `terraform-modules`
+
+`terraform/` wires pinned modules together; it does not declare AWS resources of
+its own. Need something the modules don't cover? Add it to
+[terraform-modules](https://github.com/NateDogg12501/terraform-modules), release
+a tag, and bump every `?ref=` here together — one project pins one tag. The
+`terraform` CI job fails on a `source =` that isn't a tag-pinned reference to
+that repo.
+{% if needs_datastore %}
+The one hand-written resource here is expected, not a violation:
+`aws_iam_role_policy.app_table_access` is glue between two modules — neither can
+own a policy that spans both, so `lambda-web-app` exposes `lambda_role_name` for
+exactly this. IAM joining two modules is the carve-out; anything a module could
+own is not.
+{% else %}
+The only carve-out is IAM that joins two modules, and this project has none.
+{% endif %}
+
+State lives in S3 (`terraform/backend.tf`), in the bucket `terraform/bootstrap/`
+creates. **Bootstrap is a separate root config with *local* state, applied once.**
+Don't collapse it into `terraform/` and don't move it onto the backend it
+creates — a config can't keep its state in a bucket it also manages. Its
+`terraform.tfstate` is gitignored; read `terraform/README.md` before deleting it,
+and before any `terraform destroy`, which has an order that matters.
+{% endif %}
 
 ## Testing conventions
 

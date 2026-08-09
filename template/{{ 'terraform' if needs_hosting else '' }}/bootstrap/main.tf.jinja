@@ -1,0 +1,33 @@
+# Creates the S3 bucket that holds *this project's* Terraform state, so the
+# config in the parent directory can use an S3 backend. Run once, before the
+# first `terraform init` next door:
+#
+#   terraform init && terraform apply
+#
+# Its own state stays local and gitignored, necessarily: a config that creates
+# the state bucket cannot keep its state in that bucket. Losing this state
+# loses nothing that is deployed — see ../README.md.
+terraform {
+  required_version = ">= 1.10"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 6.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = "{{ aws_region }}"
+}
+
+# Literals, not variables, on purpose: ../backend.tf cannot interpolate, so the
+# name and region are already literals there. Both files render from the same
+# Copier answers; a `-var` override here would create a bucket the backend does
+# not point at. Everything else is the module's default — versioning on, 90-day
+# noncurrent-version expiry, AES256 — frozen by the tag pin.
+module "tf_state" {
+  source = "git::https://github.com/NateDogg12501/terraform-modules.git//modules/s3-bucket?ref=v2.1.0"
+
+  bucket_name = "{{ state_bucket_name }}"
+}

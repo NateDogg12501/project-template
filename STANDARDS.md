@@ -44,11 +44,52 @@ will tell you.
   auto-creates one with retention `Never Expire`, and the 5GB free tier is
   where billing *starts*, not a cap. `lambda-web-app` sets a 14-day default
   for exactly this reason.
-- Use the shared modules in [`terraform-modules`](../terraform-modules)
-  (`lambda-web-app`, `dynamodb-single-table`) rather than hand-writing
-  Lambda/DynamoDB resources again — see that repo's README for the
-  gotchas already solved there (Function URL permissions, provider version,
-  GSI key_schema bug).
+- **All Terraform in a generated project derives from
+  [`terraform-modules`](../terraform-modules).** A root config wires pinned
+  modules together and passes values between them; it does not declare AWS
+  resources of its own. Today that is `lambda-web-app`,
+  `dynamodb-single-table` and `s3-bucket`. Something the modules do not cover
+  is a change to *that* repo — a new module, or a new variable on an existing
+  one, released under a tag — not a resource block here. See its README for
+  the gotchas already solved there (Function URL permissions, provider
+  version, GSI key_schema bug) and its CHANGELOG for what a tag bump pulls in.
+- **One project pins one tag across its whole config.** Every module `source`
+  ends in the same `?ref=vX.Y.Z`, so upgrading is a single decision with a
+  single changelog to read rather than a per-module archaeology exercise.
+- **State lives in S3, not on a laptop.** `terraform/bootstrap/` is a separate
+  root config, with local state, whose only job is creating the state bucket
+  with `s3-bucket`; `terraform/` then uses that bucket as an `s3` backend with
+  `use_lockfile = true` — S3-native locking, no DynamoDB lock table — which is
+  why generated configs require Terraform >= 1.10. Local state means no
+  locking, no history, and one lost file between a project and infrastructure
+  Terraform can no longer see or destroy.
+
+### Enforcement: pinned module sources
+
+The `terraform` CI job in every generated project fails when a `source =` in
+any `*.tf` is not
+`git::https://github.com/NateDogg12501/terraform-modules.git//modules/<name>?ref=vX.Y.Z`.
+An unpinned `?ref=main`, a missing `?ref=`, a registry source and a local path
+all fail. Provider `source` shorthands are excluded by shape, not by position:
+a registry *module* source is `NAMESPACE/NAME/PROVIDER`, so two segments
+(`hashicorp/aws`) can only be a provider. **The check also fails when it finds
+no pinned source at all** — a grep that matches nothing is otherwise green, and
+the two worst regressions this pipeline has had were both checks that passed
+having verified nothing.
+
+**Cross-module IAM is the one hand-written resource this rule expects, and it
+is not an exception being smuggled in.** `lambda-web-app` exposes
+`lambda_role_name` precisely so the caller can attach policies: the module that
+owns the role cannot know what will sit beside it, and the module that owns the
+table cannot attach to a role it does not own. So
+`aws_iam_role_policy.app_table_access` in a DATABASE project's `main.tf` is the
+intended shape. The rule is about resources a module *could* own; glue between
+two modules is not one.
+
+The honest limit: this reads module *sources*, not resource blocks. It cannot
+tell that glue from a hand-written Lambda, and it cannot tell that a pinned
+module is the *right* module. It catches the mechanical half — an unpinned or
+off-repo source — and a reviewer catches the rest.
 
 ### Enforcement: `cost_acknowledged`
 
