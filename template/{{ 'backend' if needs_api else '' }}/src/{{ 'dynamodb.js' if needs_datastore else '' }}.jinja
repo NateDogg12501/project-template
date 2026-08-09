@@ -35,5 +35,5 @@ export function createDynamoDBClient(env = process.env) {
 // commands. `ddb` is the DocumentClient wrapper application code should use
 // for item reads/writes; it marshals plain JS objects to and from DynamoDB's
 // attribute-value format.
-export const { client } = createDynamoDBClient()
+export const { client, endpoint } = createDynamoDBClient()
 export const ddb = DynamoDBDocumentClient.from(client)

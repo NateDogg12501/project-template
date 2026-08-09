@@ -35,7 +35,7 @@ docker compose up -d --build           # full app locally
 npm test --prefix backend              # API tests (vitest + supertest)
 {% endif %}
 {% if needs_datastore %}
-npm run test:integration --prefix backend  # real read/write against dynamodb-local — needs `docker compose up -d --wait dynamodb-local` first
+docker compose up -d --wait dynamodb-local && AWS_ENDPOINT_URL_DYNAMODB=http://localhost:8000 npm run test:integration --prefix backend  # real read/write against dynamodb-local
 {% endif %}
 {% if needs_ui %}
 npm test --prefix frontend             # UI tests (vitest + jsdom)

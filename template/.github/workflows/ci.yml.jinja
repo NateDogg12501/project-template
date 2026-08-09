@@ -55,13 +55,13 @@ jobs:
 {% endif %}
 {% if needs_hosting %}
 
-  # HOSTED owns this job. It also validates whatever DATABASE puts inside
+  # HOSTED owns this job.{% if needs_datastore %} It also validates whatever DATABASE puts inside
   # terraform/ (the table module + its IAM policy) — same as this job
   # validating HOSTED's own blocks, since it checks the whole directory, not
   # one capability's share of it. DATABASE's own CI job is `datastore`,
   # below, which is where its local/runnable code (not its Terraform) is
   # tested; see STANDARDS.md's "The contract: a capability owns its files,
-  # its tests, and its CI job".
+  # its tests, and its CI job".{% endif +%}
   terraform:
     runs-on: ubuntu-latest
     defaults:
