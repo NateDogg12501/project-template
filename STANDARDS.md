@@ -28,6 +28,34 @@ anything described here gets treated as live design input whether or not it
 still exists. If you need to know why something is gone, `docs/decisions.md`
 will tell you.
 
+## The flagship loop
+
+**`kids-ledger` is the flagship project.** New patterns get trialled there
+before being promoted into the template. Its `docs/decisions.md` is therefore
+evidence, not just history — the place where an idea proved itself before
+becoming a standard.
+
+The upward path for a pattern to become a standard is a four-step loop:
+
+1. **Trial it in `kids-ledger`.** Log it in *that project's* `docs/decisions.md`,
+   with why. This is the evidence layer.
+2. **Ask whether it generalizes.** Some things are project-specific and should
+   stay. This step is the one that gets skipped, and skipping it is how a
+   template accretes one project's accidents.
+3. **If it generalizes, change `project-template` or `terraform-modules`**,
+   citing the `kids-ledger` entry as evidence. A standards change gets a
+   `STANDARDS.md` entry here and a `docs/decisions.md` entry in that repo —
+   the discipline that already exists; this just names where the evidence
+   comes from.
+4. **`copier update` other projects when they're ready.** Nothing moves on its
+   own — same philosophy as the module tag pins.
+
+**Where multi-repo design documents live:** `project-template/docs/`, because
+this repo is already the root of cross-project truth. Large design documents
+that span multiple repos — like the CD pipeline requirements — belong here, not
+scattered across individual repos. See [`docs/cd-pipeline.md`](docs/cd-pipeline.md)
+as the worked example.
+
 ## Hosting
 
 - **AWS Always Free unless logged in `docs/decisions.md` and explicitly

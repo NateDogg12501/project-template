@@ -713,3 +713,48 @@ idea-workflow's module preflight also parses — so renaming or moving that repo
 breaks the CI of every generated project at once. And it is a format check: it
 cannot tell that a pinned module is the *right* module, and it cannot see a
 hand-written resource at all.
+
+## 2026-08-09: kids-ledger named as the flagship project
+**Context:** Four repos work as one system (terraform-modules, project-template,
+idea-workflow, kids-ledger), with patterns tested in one project and then
+promoted into the template for all to inherit. Nothing in the pipeline currently
+says which project is the trial ground, so a future session has no way to know
+that kids-ledger's decisions log carries more weight than any other project's.
+**Decision:** name kids-ledger as the flagship explicitly in STANDARDS.md's new
+"The flagship loop" section. New patterns get trialled there first; its
+`docs/decisions.md` is the evidence layer for a standard.
+**Why not leave it implicit:** explicit naming prevents sessions from treating
+every project's decisions log equally and accidentally promoting one project's
+specific needs into a template rule. The discipline of "trial in kids-ledger
+first, then ask if it generalizes" is only effective if sessions know which
+project is the trial ground.
+**Why not spread trial projects across multiple repos:** concentrating the
+trial work in one place keeps the feedback loop tight and makes pattern-spotting
+easier. Adding a second trial project later, if needed, is a separate decision.
+**Consequence:** kids-ledger's `docs/decisions.md` becomes a loaded document —
+entries there are read as proposals to the standard, not just as project history.
+Future work wiring kids-ledger's decisions into the promotion loop will
+reference this entry as the decision to name it so.
+
+## 2026-08-09: Cross-repo design documents live in project-template/docs/
+**Context:** The four-repo CD pipeline required a design document that spans
+all four projects and belongs to none of them individually. Having no single home
+for such documents meant it either lived in a scratchpad directory (undiscoverable
+by future sessions) or got duplicated across repos (creating maintenance drift).
+**Decision:** `project-template/docs/` is the home for multi-repo design
+documents. project-template is already the root of cross-project truth
+(STANDARDS.md lives here; all projects link to it), so extending it to hold
+cross-repo architectural documents is a natural fit.
+**Why not a separate docs repo:** an extra repo adds a burden on every PR
+that affects multiple repos — coordinating changes across four+ repos plus
+a docs repo, rather than keeping docs and changes in the same place. It also
+makes the relationship between a decision and the docs that record it less
+obvious to someone reading the code later.
+**Why not scatter cross-repo docs in the individual repos:** a document that
+spans four repos has four equally-plausible homes, so sessions would have to
+search all of them to be sure it exists. One canonical home is discoverable.
+**Consequence:** changes to cross-repo design documents land in project-template
+PRs, so STANDARDS.md and `docs/decisions.md` updates travel with them. Each
+repo's CLAUDE.md points to this repo's STANDARDS.md (already the case); a future
+repo that needs to reference the CD pipeline will link to
+`project-template/docs/cd-pipeline.md` from its own CLAUDE.md or README.
