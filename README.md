@@ -73,6 +73,9 @@ whatever you've since changed by hand.
   create`). Not copied into generated projects.
 - `STANDARDS.md` — the durable rules, source of truth, linked (not copied)
   from every generated project's `CLAUDE.md`.
+- `docs/` — cross-repo design documents and the template's own decisions log.
+  [`cd-pipeline.md`](docs/cd-pipeline.md) is the requirements and phasing
+  guide for the continuous deployment pipeline spanning four repos.
 - `template/` — everything that *is* copied, Jinja2-rendered
   (`_subdirectory: template` in `copier.yml`). `.jinja`-suffixed files are
   rendered; everything else is copied verbatim. **Directory and file names
