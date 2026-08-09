@@ -1,0 +1,23 @@
+import { expect, test } from 'vitest'
+
+import { createDynamoDBClient } from '../src/dynamodb.js'
+
+// The contract this whole design rests on: set AWS_ENDPOINT_URL_DYNAMODB and
+// the client talks to that endpoint; leave it unset and the client is left to
+// resolve the real AWS endpoint on its own. No network call needed to prove
+// either half — the SDK resolves the endpoint lazily, so this only inspects
+// what the client was configured with.
+test('honours AWS_ENDPOINT_URL_DYNAMODB when it is set', async () => {
+    const { client, endpoint } = createDynamoDBClient({ AWS_ENDPOINT_URL_DYNAMODB: 'http://localhost:8000' })
+
+    expect(endpoint).toBe('http://localhost:8000')
+    const resolved = await client.config.endpoint()
+    expect(resolved.hostname).toBe('localhost')
+    expect(resolved.port).toBe(8000)
+})
+
+test('leaves the endpoint unresolved when the variable is unset — production talks to real DynamoDB', () => {
+    const { endpoint } = createDynamoDBClient({})
+
+    expect(endpoint).toBeUndefined()
+})

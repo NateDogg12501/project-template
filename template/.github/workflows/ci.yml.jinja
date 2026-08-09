@@ -55,9 +55,13 @@ jobs:
 {% endif %}
 {% if needs_hosting %}
 
-  # HOSTED owns this job. DATABASE has no job of its own — it contributes only
-  # blocks inside `terraform/` and rides this one; see STANDARDS.md's "The
-  # contract: a capability owns its files, its tests, and its CI job".
+  # HOSTED owns this job. It also validates whatever DATABASE puts inside
+  # terraform/ (the table module + its IAM policy) — same as this job
+  # validating HOSTED's own blocks, since it checks the whole directory, not
+  # one capability's share of it. DATABASE's own CI job is `datastore`,
+  # below, which is where its local/runnable code (not its Terraform) is
+  # tested; see STANDARDS.md's "The contract: a capability owns its files,
+  # its tests, and its CI job".
   terraform:
     runs-on: ubuntu-latest
     defaults:
@@ -116,4 +120,37 @@ jobs:
           cd bootstrap
           terraform init -backend=false
           terraform validate
+{% endif %}
+{% if needs_datastore %}
+
+  # DATABASE's own job. It used to ride the `terraform` job above because
+  # Terraform blocks were all it contributed; now it owns a client module, an
+  # init step and docker-compose wiring too, and this job is what actually
+  # exercises them — bringing dynamodb-local up for real and running the
+  # integration suite that plain `npm test` deliberately skips (see
+  # backend/vitest.config.js). See STANDARDS.md's "The contract: a capability
+  # owns its files, its tests, and its CI job".
+  datastore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+        working-directory: backend
+      - name: Start dynamodb-local
+        # `--wait` blocks until the healthcheck passes (or fails the step) —
+        # the same signal that keeps the backend container from racing it in
+        # docker-compose.yml.
+        run: docker compose up -d --wait dynamodb-local
+      - run: npm run test:integration
+        working-directory: backend
+        env:
+          AWS_ENDPOINT_URL_DYNAMODB: http://localhost:8000
+      - name: Stop the stack
+        if: always()
+        run: docker compose down
 {% endif -%}

@@ -1,0 +1,39 @@
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb'
+import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb'
+
+// The one place in backend/ that constructs a DynamoDB client — nowhere else
+// should. AWS_ENDPOINT_URL_DYNAMODB set (docker-compose.yml sets it) points
+// the SDK at dynamodb-local; unset — which is what a deployed Lambda does —
+// the SDK resolves the real regional DynamoDB endpoint from AWS_REGION and
+// the execution role. Same code path either way; see STANDARDS.md's
+// "Structure" for why that's the point.
+//
+// Takes `env` as a parameter (defaulting to process.env) so the endpoint
+// switch is a plain function a test can call directly, rather than something
+// only observable by mutating process.env.
+export function createDynamoDBClient(env = process.env) {
+    const endpoint = env.AWS_ENDPOINT_URL_DYNAMODB || undefined
+
+    const client = new DynamoDBClient({
+        endpoint,
+        // DynamoDB Local ignores whatever credentials it's given, but the SDK
+        // still won't construct a client without something resolvable. Real
+        // AWS credentials would work here too — there's just no reason to
+        // require them for a local database. Only supplied when the endpoint
+        // is local: in production, region and credentials come from the
+        // Lambda execution environment as normal.
+        ...(endpoint && {
+            region: env.AWS_REGION || 'local',
+            credentials: { accessKeyId: 'local', secretAccessKey: 'local' },
+        }),
+    })
+
+    return { client, endpoint }
+}
+
+// `client` is the raw SDK client — init-table.js needs it for table-management
+// commands. `ddb` is the DocumentClient wrapper application code should use
+// for item reads/writes; it marshals plain JS objects to and from DynamoDB's
+// attribute-value format.
+export const { client } = createDynamoDBClient()
+export const ddb = DynamoDBDocumentClient.from(client)
