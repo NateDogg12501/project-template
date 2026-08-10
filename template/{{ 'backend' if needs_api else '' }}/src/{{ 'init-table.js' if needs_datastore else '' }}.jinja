@@ -1,0 +1,28 @@
+import { CreateTableCommand, DescribeTableCommand, ResourceNotFoundException } from '@aws-sdk/client-dynamodb'
+
+import { client } from './dynamodb.js'
+
+const TABLE_NAME = process.env.ITEMS_TABLE_NAME || '{{ project_slug }}-items'
+
+// DynamoDB Local starts empty on every restart — it runs -inMemory (see
+// docker-compose.yml) so a fresh `compose up` is always a clean slate.
+// Terraform creates this table in real AWS (terraform/main.tf's
+// `module "table"`); this recreates the identical key schema locally so
+// there's somewhere to read and write. The local schema here and the
+// Terraform schema there are two definitions of the same thing — nothing
+// keeps them in sync automatically, so change one and change the other. See
+// CLAUDE.md.
+export async function ensureTableExists() {
+    try {
+        await client.send(new DescribeTableCommand({ TableName: TABLE_NAME }))
+    } catch (err) {
+        if (!(err instanceof ResourceNotFoundException)) throw err
+
+        await client.send(new CreateTableCommand({
+            TableName: TABLE_NAME,
+            AttributeDefinitions: [{ AttributeName: 'id', AttributeType: 'S' }],
+            KeySchema: [{ AttributeName: 'id', KeyType: 'HASH' }],
+            BillingMode: 'PAY_PER_REQUEST',
+        }))
+    }
+}

@@ -1,0 +1,21 @@
+import { {% if needs_datastore %}configDefaults, {% endif %}defineConfig } from 'vitest/config'
+
+// This file ships even though it is barely more than vitest's defaults, and
+// that is the point: with no config *in this package*, vitest searches upward
+// from here, and a config belonging to an unrelated parent directory wins.
+// The failure is silent — vitest reports "No test files found" and exits 0, so
+// CI stays green while testing nothing. Don't delete it because it looks empty.
+export default defineConfig({
+    test: {
+        environment: 'node',
+        include: ['test/**/*.test.js'],
+{% if needs_datastore %}
+        // Excluded here, not left out of `include`, so the reason is visible:
+        // these need dynamodb-local actually running, which plain `npm test`
+        // (the `backend` CI job) does not provide.
+        // vitest.integration.config.js picks them up instead, run by
+        // `npm run test:integration` and the `datastore` CI job.
+        exclude: [...configDefaults.exclude, 'test/integration/**'],
+{% endif %}
+    },
+})

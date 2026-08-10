@@ -1,0 +1,13 @@
+import { defineConfig } from 'vitest/config'
+
+// Separate from vitest.config.js on purpose: these tests exercise the real
+// dynamodb-local container over the network, so they can't run as part of
+// plain `npm test` (which the `backend` CI job runs with no datastore up).
+// The `datastore` CI job brings the stack up first, then runs
+// `npm run test:integration`, which points at this config.
+export default defineConfig({
+    test: {
+        environment: 'node',
+        include: ['test/integration/**/*.test.js'],
+    },
+})

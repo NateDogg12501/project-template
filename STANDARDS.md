@@ -179,8 +179,21 @@ that stage. Both refuse to proceed silently; both hand the call to a human.
   vice versa.
 - `docker compose up -d --build` is the one true "run this locally" command
   for any project with the API capability — no undocumented manual setup
-  steps. A UI-only project has no server to compose, and says so in its
+  steps. For the DATABASE capability that now includes a working datastore:
+  `dynamodb-local` comes up healthy before the API container starts, seeded
+  with the same table schema Terraform declares, with no AWS credentials
+  required. A UI-only project has no server to compose, and says so in its
   README instead.
+- **The datastore endpoint is configuration, not an abstraction layer.** One
+  module in `backend/src/` constructs the DynamoDB client, reading the
+  endpoint from `AWS_ENDPOINT_URL_DYNAMODB` — set, it points at
+  `dynamodb-local`; unset, the AWS SDK resolves the real regional DynamoDB
+  endpoint, which is what a deployed Lambda does by never setting it. No
+  other file in a generated project constructs a DynamoDB client. The reason
+  it is one environment-variable switch and not a hand-written
+  repository/adapter layer: local and deployed then run the exact same code
+  path end to end, so a bug can't hide in a difference between them — a
+  hand-rolled abstraction is exactly what would introduce one.
 
 ## Documentation
 
@@ -273,7 +286,7 @@ single boolean in `copier.yml`, independently on or off:
 | API | `needs_api` | An Express backend in `backend/`, run by docker compose. |
 | UI | `needs_ui` | Static files in `frontend/`. |
 | HOSTED | `needs_hosting` | Deployed to AWS Lambda on Always Free, via `terraform/`. |
-| DATABASE | `needs_datastore` | DynamoDB, via the shared `dynamodb-single-table` module. |
+| DATABASE | `needs_datastore` | DynamoDB — the shared `dynamodb-single-table` Terraform module when deployed, `dynamodb-local` via docker compose when run locally, both behind the one client module in `backend/src/`. |
 
 ### The contract: a capability owns its files, its tests, and its CI job
 
@@ -291,11 +304,6 @@ capability* — until all three exist. Concretely, to add one:
    capability's suite.
 3. **A CI job.** Its own job in `template/.github/workflows/ci.yml.jinja`,
    gated on the same flag.
-
-The one allowed exception is a capability that cannot exist alone: DATABASE
-requires HOSTED, contributes only blocks inside `terraform/`, and is
-therefore covered by HOSTED's `terraform` job. A capability riding another's
-job must say so where the job is defined.
 
 Not every job belongs to a capability, though — `ci.yml.jinja` also has
 **ungated jobs owned by the template itself**, for files every project gets

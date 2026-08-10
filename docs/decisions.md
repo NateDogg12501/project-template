@@ -758,3 +758,63 @@ PRs, so STANDARDS.md and `docs/decisions.md` updates travel with them. Each
 repo's CLAUDE.md points to this repo's STANDARDS.md (already the case); a future
 repo that needs to reference the CD pipeline will link to
 `project-template/docs/cd-pipeline.md` from its own CLAUDE.md or README.
+
+## 2026-08-09: DynamoDB Local for the DATABASE capability's local parity; DATABASE earns its own CI job
+**Context:** a generated DATABASE project had no way to run `docker compose up`
+against anything but real AWS DynamoDB — `backend/` had no client-construction
+code at all, so nothing exercised a read/write path without live AWS
+credentials, which made a fresh clone unrunnable and gave CI nothing to test
+data-shaped behaviour against. LocalStack was the obvious first candidate —
+it's what most projects reach for — but its OSS repo was archived on
+2026-03-23 and Community Edition ended: every image now sits behind mandatory
+auth, with core services behind a paid plan. LocalStack ran DynamoDB Local
+underneath for DynamoDB anyway, so going straight to `amazon/dynamodb-local` —
+AWS's own image, free forever, no account, no auth token, no license, no
+commercial-use restriction — is strictly less machinery for the same result.
+**Decision:** added `dynamodb-local` to `docker-compose.yml` (gated on
+`needs_datastore`, healthchecked, `backend` depending on it with
+`condition: service_healthy` so a cold `compose up` can't race it); a single
+client-construction module, `backend/src/dynamodb.js`, that reads
+`AWS_ENDPOINT_URL_DYNAMODB` and is the only file in `backend/src/` allowed to
+construct a DynamoDB client; and a small init step,
+`backend/src/init-table.js`, that recreates the same key schema
+`terraform/main.tf`'s `module "table"` declares, run from `src/index.js` only
+when `AWS_ENDPOINT_URL_DYNAMODB` is set — never against real AWS, which
+Terraform already owns. `dynamodb-local` runs `-inMemory`, so every
+`compose up` is a clean slate and there is no volume to gitignore or seed.
+DATABASE also gets its own `datastore` CI job, which brings the stack up and
+runs a real integration suite (`backend/test/integration/`, its own
+`vitest.integration.config.js`, kept out of plain `npm test` via
+`vitest.config.js`'s `exclude`) — it used to ride HOSTED's `terraform` job
+because Terraform blocks were the only thing it contributed; now it
+contributes runnable code and earns the job the capability contract asks for.
+It still doesn't get its *own* Terraform validation — the `terraform` job
+keeps checking DATABASE's blocks, same as it checks HOSTED's, because both
+live in the one directory that job validates wholesale.
+**Why not LocalStack:** covered above — for this use case it is now a worse,
+extra-auth version of the thing it wraps, not a reason to add a second layer
+over the same DynamoDB Local binary.
+**Why the endpoint switch and not a repository/adapter abstraction:** a
+hand-written data-access layer means local and deployed exercise different
+code, and that is exactly where the bugs that matter hide. One env var read in
+one file keeps the code path byte-identical either way — see STANDARDS.md's
+"Structure".
+**Why the healthcheck doesn't use `curl -f`:** verified against the real
+`amazon/dynamodb-local:latest` image before writing it (Amazon Linux 2023
+base; `curl` is present at `/usr/bin/curl`). A bare `GET /` returns HTTP 400 —
+the image only implements the DynamoDB POST API — and `curl -f` treats any
+4xx as a failure, so a `curl -f`-based healthcheck would never pass even
+though the server is up. `curl -s -o /dev/null http://localhost:8000/`
+without `-f` just confirms the port answers, which is all the healthcheck
+needs to know.
+**Consequence:** `backend/package.json` gains `@aws-sdk/client-dynamodb` and
+`@aws-sdk/lib-dynamodb`; `AWS_ENDPOINT_URL_DYNAMODB` and `DYNAMODB_PORT` join
+`.env.example` (the latter picked up automatically by
+`scripts/setup-worktree-env.js`'s `*_PORT` scan, so concurrent worktrees don't
+collide on the published port). `ci.yml.jinja`'s `terraform` job comment no
+longer claims DATABASE rides it for everything, since that stopped being
+true. A generated project's local table schema (`init-table.js`) and its
+Terraform schema (`terraform/main.tf`) are now two definitions of the same
+thing that must be changed together — named explicitly in the generated
+`CLAUDE.md` rather than hidden, because nothing here keeps them in sync
+automatically.
