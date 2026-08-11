@@ -22,7 +22,9 @@ on:
           - staging
           - production
       ref:
-        description: Git ref to deploy. Defaults to the ref the run was dispatched against.
+        description: >-
+          Git ref to deploy. Staging only — a production deploy always builds
+          the ref it was dispatched against. Defaults to that ref.
         required: false
         type: string
 
@@ -42,6 +44,23 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      # "Only main deploys to production" is meant to be enforced by AWS, not
+      # by YAML: production's OIDC trust policy pins
+      # `repo:<org>/<repo>:ref:refs/heads/main`. That pin is built from
+      # `github.ref` — the ref this run was *dispatched* against — and the
+      # `ref` input below is a different thing entirely, read only by
+      # `actions/checkout`. So dispatching on main (satisfying the pin, getting
+      # the production role) while passing `ref: any-branch` would build and
+      # deploy that branch to production, and AWS would never see the
+      # difference. This is the one part of that guarantee AWS structurally
+      # cannot enforce, so it is closed here — before the role is assumed, so a
+      # refused production deploy never even holds credentials.
+      - name: Refuse a production deploy of anything but the dispatched ref
+        if: inputs.environment == 'production' && inputs.ref != ''
+        run: |
+          echo "::error::A production deploy cannot take a 'ref' input — it always builds the ref it was dispatched against, which is what production's OIDC trust policy pins to main. Dispatch against the ref you want: gh workflow run deploy.yml --ref main --field environment=production."
+          exit 1
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ '{{' }} inputs.ref || github.ref }}

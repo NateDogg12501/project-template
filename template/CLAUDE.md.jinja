@@ -105,6 +105,14 @@ Three things there are load-bearing and easy to undo by accident:
   something outside this repository, which is waiting on it either way.
 - **`ensure-secrets` never rotates.** Regenerating `session_secret` on every
   deploy logs every user out on every ship.
+- **A production deploy refuses the `ref` input, and that check is a security
+  boundary.** Production's OIDC trust policy pins `refs/heads/main`, but it
+  builds that pin from `github.ref` — the ref the run was *dispatched*
+  against — while the `ref` input is read only by `actions/checkout`. Allowing
+  both means dispatching against `main` for the pin and deploying something
+  else, with AWS unable to tell. It looks like an arbitrary restriction on a
+  convenience input; it is the only part of "only main deploys to production"
+  that AWS cannot enforce itself.
 {% if needs_datastore %}
 
 ### Staging starts empty, and that is the seed stage working

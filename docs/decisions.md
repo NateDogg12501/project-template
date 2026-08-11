@@ -1060,3 +1060,35 @@ cannot be grepped from here. `template/docs/deploy.md` is the copy of the
 contract that travels with each generated project, and P08 codes against it.
 Adding a field is additive; renaming one breaks a consumer that is not in this
 repo.
+
+## 2026-08-11: A production deploy refuses the `ref` input
+**Context:** `deploy.yml` takes an optional `ref` so a deploy can build
+something other than the ref it was dispatched against. Separately, B3 of
+`docs/cd-pipeline.md` states that "only main deploys to production" is
+enforced by AWS rather than by YAML: the production role's OIDC trust policy
+pins `repo:<org>/<repo>:ref:refs/heads/main`.
+**Decision:** a production deploy with a non-empty `ref` input fails, in the
+first step, before any role is assumed. Staging is unaffected.
+**Why:** the two features silently cancel each other out. The OIDC subject
+claim is built from `github.ref` — the ref the run was *dispatched* against —
+while the `ref` input is read only by `actions/checkout`. Dispatching against
+`main` satisfies the trust pin and hands over the production role; the input
+then decides what is actually built. AWS sees a compliant run and cannot tell
+the difference, so the guarantee the pin was supposed to make is gone. This
+was found reviewing the P04 diff, not by the pin failing — which is the point:
+it never would have.
+**Why in YAML, when the surrounding argument is that YAML is the weaker
+place to enforce this:** that argument holds for everything AWS *can* see. The
+ref-vs-input gap is the one part it structurally cannot, because both runs look
+identical from outside. A check in YAML is not a duplicate of the AWS pin here;
+it is the only cover for the case the pin misses.
+**Why a flat refusal and not "must be an ancestor of `main`":** ancestry is the
+more permissive rule and would allow redeploying an older `main` commit, but
+rollback is explicitly out of scope (`cd-pipeline.md`, fix forward) and the
+check would need a full-depth checkout to answer. When rollback arrives, this
+is the check to relax rather than delete.
+**Consequence:** the production dispatch is `gh workflow run deploy.yml --ref
+main --field environment=production` — the ref goes on `--ref`, never in
+`--field ref=`. P08's Phase D dispatches exactly that way. Recorded in the
+generated `CLAUDE.md` as an invariant, because the refusal reads like an
+arbitrary limit on a convenience input unless you know what it is covering.

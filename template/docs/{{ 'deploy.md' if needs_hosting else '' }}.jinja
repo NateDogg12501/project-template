@@ -17,11 +17,30 @@ the orchestrator after a green build; a production deploy is a human pressing
 | Input | Required | Meaning |
 |---|---|---|
 | `environment` | yes | `staging` or `production`. Mirrors `terraform/variables.tf`'s validation. |
-| `ref` | no | Git ref to deploy. Defaults to the ref the run was dispatched against. |
+| `ref` | no | Git ref to deploy. **Staging only** — see below. Defaults to the ref the run was dispatched against. |
 
 ```bash
 gh workflow run deploy.yml --field environment=staging
+gh workflow run deploy.yml --ref main --field environment=production
 ```
+
+### Why `ref` is refused for production
+
+"Only `main` deploys to production" is enforced by AWS rather than by this
+workflow: the production role's OIDC trust policy pins
+`repo:<org>/<repo>:ref:refs/heads/main`, so a run dispatched against any other
+ref cannot assume it at all.
+
+That pin is built from `github.ref` — the ref the run was *dispatched*
+against. The `ref` **input** is a different value, read only by
+`actions/checkout`. Supplying both would mean dispatching against `main` to
+satisfy the pin, then building something else entirely, and AWS could not see
+the difference. It is the one part of the guarantee AWS structurally cannot
+enforce, so the workflow refuses it before assuming any role.
+
+Rolling back by redeploying an older commit is out of scope for now
+(`docs/cd-pipeline.md` says fix forward), which is why the refusal is flat
+rather than "must be an ancestor of `main`".
 
 Two repository **variables** (not secrets — a role ARN is not one) select the
 role: `AWS_ROLE_STAGING` and `AWS_ROLE_PROD`. A missing one fails the run with
