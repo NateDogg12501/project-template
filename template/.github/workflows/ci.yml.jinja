@@ -171,6 +171,30 @@ jobs:
             terraform plan -input=false -var="environment=$env"
             echo "::endgroup::"
           done
+
+  # HOSTED's second job, for the fourth thing a capability owns: its pipeline
+  # stages. The stages themselves run in deploy.yml against real AWS; this is
+  # what exercises their logic — pagination, retries, thresholds and refusals —
+  # against recorded calls, on every pull request, for free.
+{% if needs_datastore %}
+  # DATABASE's `seed` stage rides this job rather than having one of its own,
+  # the same carve-out that has it riding `terraform` above: it lives in the
+  # same package and is covered by the same command.
+{% endif %}
+  pipeline-stages:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .github/actions
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: .github/actions/package-lock.json
+      - run: npm ci
+      - run: npm test
 {% endif %}
 {% if needs_datastore %}
 

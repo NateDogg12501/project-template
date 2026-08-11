@@ -1,0 +1,64 @@
+name: Smoke test
+description: >-
+  Polls the deployed health endpoint and fails the job if it never answers. An
+  apply that succeeded while the app serves 502 is the failure this catches:
+  without it the Jira ticket reaches Staging Review pointing at a broken URL,
+  which looks exactly like a successful deploy.
+
+inputs:
+  url:
+    description: Base URL of the deployment, e.g. the Lambda Function URL.
+    required: true
+  path:
+    description: Health path appended to the base URL.
+    required: false
+    default: /api/health
+  attempts:
+    description: >-
+      How many times to try before failing. Delay doubles from initial-delay
+      each time, so the defaults wait at most 3+6+12+24 = 45 seconds in total —
+      long enough for a cold start, short enough not to idle on a deployment
+      that is never coming up. Actions minutes are capped, so this stays
+      bounded by construction.
+    required: false
+    default: '5'
+  initial-delay:
+    description: Seconds to wait after the first failed attempt.
+    required: false
+    default: '3'
+
+runs:
+  using: composite
+  steps:
+    - name: Poll the health endpoint
+      shell: bash
+      env:
+        BASE_URL: ${{ inputs.url }}
+        HEALTH_PATH: ${{ inputs.path }}
+        ATTEMPTS: ${{ inputs.attempts }}
+        INITIAL_DELAY: ${{ inputs.initial-delay }}
+      run: |
+        set -uo pipefail
+        [ -n "$BASE_URL" ] || { echo "::error::smoke-test was given no URL — the apply stage did not report one."; exit 1; }
+        target="${BASE_URL%/}${HEALTH_PATH}"
+        delay="$INITIAL_DELAY"
+        code=000
+
+        for attempt in $(seq 1 "$ATTEMPTS"); do
+          # --fail is deliberately absent: a 5xx is information here, not an
+          # error to hide, and the status code is what the message needs.
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$target" || echo 000)
+          echo "attempt $attempt/$ATTEMPTS: $target -> $code"
+          if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then
+            echo "::notice::$target answered $code"
+            exit 0
+          fi
+          # No sleep after the last attempt — that would be pure idle time.
+          if [ "$attempt" -lt "$ATTEMPTS" ]; then
+            sleep "$delay"
+            delay=$(( delay * 2 ))
+          fi
+        done
+
+        echo "::error::$target did not become healthy after $ATTEMPTS attempts (last status $code). The apply succeeded, so the infrastructure exists — check the Lambda's CloudWatch logs."
+        exit 1

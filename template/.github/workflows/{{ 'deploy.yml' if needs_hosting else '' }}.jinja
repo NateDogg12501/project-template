@@ -1,0 +1,164 @@
+name: Deploy
+
+# This workflow sequences stages and holds no deploy logic of its own. Each
+# stage is a composite action in .github/actions/, independently runnable and
+# independently testable; if a step here grows past a few lines of shell it
+# belongs in a stage instead. See docs/deploy.md.
+#
+# Dispatch only, never `on: push`. A staging deploy is chained by the
+# orchestrator after a green build; a production deploy is a human pressing
+# Ship It in Jira. Neither is "someone merged something".
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Which environment to deploy.
+        required: true
+        type: choice
+        # Mirrors variable "environment"'s validation in terraform/variables.tf
+        # and the loop in ci.yml's terraform job. A third environment is a list
+        # entry in each of those three places, not a redesign.
+        options:
+          - staging
+          - production
+      ref:
+        description: Git ref to deploy. Defaults to the ref the run was dispatched against.
+        required: false
+        type: string
+
+permissions:
+  # OIDC, so that no AWS key exists in this repository or in any of these runs.
+  id-token: write
+  contents: read
+
+# One deploy per environment at a time. Terraform's S3 state lock would fail
+# the second one anyway — queueing is the same outcome without the red run, and
+# a queued run burns no Actions minutes.
+concurrency:
+  group: deploy-{{ project_slug }}-${{ '{{' }} inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ '{{' }} inputs.ref || github.ref }}
+
+      # `github.sha` is the sha the run was dispatched against, which is not
+      # what was checked out when `ref` was supplied. deploy-result.json has to
+      # name the commit that was actually deployed.
+      - name: Record the deployed commit
+        id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Written out rather than as `environment == 'production' && PROD || STAGING`:
+      # that expression falls through to the staging role when AWS_ROLE_PROD is
+      # unset, and "the production deploy quietly ran as staging" is the one
+      # failure here that must never be silent.
+      - name: Resolve the deploy role
+        id: role
+        env:
+          ENVIRONMENT: ${{ '{{' }} inputs.environment }}
+          STAGING_ROLE: ${{ '{{' }} vars.AWS_ROLE_STAGING }}
+          PROD_ROLE: ${{ '{{' }} vars.AWS_ROLE_PROD }}
+        run: |
+          if [ "$ENVIRONMENT" = "production" ]; then role="$PROD_ROLE"; else role="$STAGING_ROLE"; fi
+          if [ -z "$role" ]; then
+            echo "::error::No deploy role is configured for $ENVIRONMENT — this project has not been through per-project AWS provisioning yet."
+            exit 1
+          fi
+          echo "arn=$role" >> "$GITHUB_OUTPUT"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ '{{' }} steps.role.outputs.arn }}
+          aws-region: {{ aws_region }}
+
+      # First, because it is the only check that can see the whole account and
+      # because it is cheapest to fail before anything has been created.
+      - name: Capacity gate
+        uses: ./.github/actions/capacity-gate
+
+      - name: Ensure secrets
+        uses: ./.github/actions/ensure-secrets
+        with:
+          parameter-name: /{{ project_slug }}/${{ '{{' }} inputs.environment }}/session_secret
+
+      # Inline rather than a stage: `terraform apply` zips dist-lambda/, it does
+      # not build it, and lambda-web-app's precondition fails the *plan* on a
+      # missing artifact — so this has to happen before terraform-apply runs.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Build the Lambda artifact
+        working-directory: backend
+        run: |
+          npm ci
+          npm run build:lambda
+
+      - name: Terraform apply
+        id: apply
+        uses: ./.github/actions/terraform-apply
+        with:
+          environment: ${{ '{{' }} inputs.environment }}
+          state-key: {{ project_slug }}/${{ '{{' }} inputs.environment }}/terraform.tfstate
+{% if needs_datastore %}
+
+      # Guarded here as well as inside the stage. This `if` is what stops every
+      # production deploy running a stage that would refuse; the stage's own
+      # refusal is what stops anyone calling it directly against production.
+      - name: Seed staging from sanitized production data
+        if: inputs.environment == 'staging'
+        uses: ./.github/actions/seed
+        with:
+          environment: ${{ '{{' }} inputs.environment }}
+          source-table: {{ project_slug }}-production-items
+          target-table: {{ project_slug }}-${{ '{{' }} inputs.environment }}-items
+{% endif %}
+
+      # An apply that succeeded while the app serves 502 is not a deploy.
+      - name: Smoke test
+        uses: ./.github/actions/smoke-test
+        with:
+          url: ${{ '{{' }} steps.apply.outputs.function-url }}
+
+      # On failure as well as success: idea-workflow polls this run and needs
+      # something to put in the Jira comment either way. `docs/deploy.md` holds
+      # the schema, and that document is the contract — do not change the keys
+      # without changing it.
+      - name: Write the deploy result
+        if: always()
+        env:
+          ENVIRONMENT: ${{ '{{' }} inputs.environment }}
+          URL: ${{ '{{' }} steps.apply.outputs.function-url }}
+          SHA: ${{ '{{' }} steps.commit.outputs.sha }}
+          # 'success' until something has failed, so read in an always() step
+          # this is the outcome of every stage above.
+          STATUS: ${{ '{{' }} job.status }}
+        run: |
+          jq -n \
+            --arg environment "$ENVIRONMENT" \
+            --arg url "$URL" \
+            --arg sha "$SHA" \
+            --arg status "$STATUS" \
+            '{environment: $environment, url: $url, sha: $sha, status: $status}' > deploy-result.json
+          cat deploy-result.json
+
+      # A named artifact rather than job outputs: reading a job's outputs back
+      # across the REST API is awkward, and an artifact is one download with a
+      # stable name.
+      - name: Upload the deploy result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-result
+          path: deploy-result.json
+          # The orchestrator's whole read of this run is this file. Uploading
+          # nothing and passing would leave it waiting on an artifact that is
+          # never coming.
+          if-no-files-found: error
+          retention-days: 14

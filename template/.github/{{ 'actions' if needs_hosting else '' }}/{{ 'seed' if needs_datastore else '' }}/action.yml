@@ -1,0 +1,52 @@
+name: Seed staging
+description: >-
+  Reseeds the staging table from a sanitized export of the production table.
+  Refuses to run against any other environment, and refuses to copy anything at
+  all until this project supplies a sanitizer — the template cannot know which
+  attributes hold personal data, and a seed stage that silently copies real
+  data is worse than no seed stage.
+
+  Export is a Scan rather than a point-in-time export: PITR bills per GB-month,
+  and scanning a small table costs a handful of read units.
+
+inputs:
+  environment:
+    description: Environment being deployed. Anything but "staging" fails the stage before it reads a single item.
+    required: true
+  source-table:
+    description: Production table to export from.
+    required: true
+  target-table:
+    description: Staging table to write into. Must be named for the staging environment.
+    required: true
+  sanitizer:
+    description: >-
+      Path, relative to the repository root, of the project's sanitizer module.
+      It exports a default function taking one DynamoDB item in AttributeValue
+      form and returning a new item to keep, or null to drop it. Absent means
+      nothing is copied.
+    required: false
+    default: scripts/sanitize-seed.js
+  clear-target:
+    description: Delete the staging table's existing items first, so a reseed replaces rather than merges.
+    required: false
+    default: 'true'
+
+outputs:
+  seeded:
+    description: '"true" if data was copied; "false" if the stage refused, which is not a failure.'
+    value: ${{ steps.seed.outputs.seeded }}
+
+runs:
+  using: composite
+  steps:
+    - name: Reseed staging from sanitized production data
+      id: seed
+      shell: bash
+      env:
+        ENVIRONMENT: ${{ inputs.environment }}
+        SOURCE_TABLE: ${{ inputs.source-table }}
+        TARGET_TABLE: ${{ inputs.target-table }}
+        SANITIZER: ${{ inputs.sanitizer }}
+        CLEAR_TARGET: ${{ inputs.clear-target }}
+      run: node "$GITHUB_ACTION_PATH/seed.js"

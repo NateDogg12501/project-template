@@ -1,0 +1,30 @@
+name: Capacity gate
+description: >-
+  Fails the deploy when provisioned DynamoDB capacity summed across every table
+  in this AWS account and region is over the threshold. This is the only check
+  in the pipeline that can see the account total — terraform-modules'
+  cost_acknowledged precondition sees one table's own numbers, so five projects
+  can each pass at 6 units and collectively sit at 30.
+
+inputs:
+  threshold:
+    description: >-
+      Maximum provisioned read or write capacity units allowed across the
+      account before this deploy is refused. Defaults to 20 of the 25-unit
+      always-free allowance, leaving headroom for the table this deploy is
+      about to create. A value at or above 25 is accepted but warned about — it
+      cannot stop the account leaving the free tier.
+    required: false
+    default: '20'
+
+runs:
+  using: composite
+  steps:
+    # Node is preinstalled on GitHub-hosted runners and capacity.js has no
+    # dependencies, so this stage needs no setup-node and no npm install. Its
+    # tests do, and they run in CI's pipeline-stages job rather than here.
+    - name: Sum account-wide provisioned DynamoDB capacity
+      shell: bash
+      env:
+        THRESHOLD: ${{ inputs.threshold }}
+      run: node "$GITHUB_ACTION_PATH/capacity.js"

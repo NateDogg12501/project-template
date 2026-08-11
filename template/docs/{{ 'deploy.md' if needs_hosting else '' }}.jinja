@@ -1,0 +1,165 @@
+# Deploying {{ project_name }}
+
+`.github/workflows/deploy.yml` is the only thing that deploys this project. It
+sequences stages and holds no logic of its own; every stage is a composite
+action under `.github/actions/`, and each one is runnable and testable on its
+own. Their tests are the `pipeline-stages` CI job.
+
+Nothing here has AWS keys. The workflow assumes a role over OIDC, per
+environment, and the roles themselves are created outside this repository.
+
+## Triggering it
+
+`workflow_dispatch` only — never `on: push`. A staging deploy is chained by
+the orchestrator after a green build; a production deploy is a human pressing
+**Ship It** in Jira. Neither of those is "someone merged something".
+
+| Input | Required | Meaning |
+|---|---|---|
+| `environment` | yes | `staging` or `production`. Mirrors `terraform/variables.tf`'s validation. |
+| `ref` | no | Git ref to deploy. Defaults to the ref the run was dispatched against. |
+
+```bash
+gh workflow run deploy.yml --field environment=staging
+```
+
+Two repository **variables** (not secrets — a role ARN is not one) select the
+role: `AWS_ROLE_STAGING` and `AWS_ROLE_PROD`. A missing one fails the run with
+a message rather than falling back to the other environment's role.
+
+Deploys are serialised per environment by a `concurrency` group. A second run
+queues rather than racing the Terraform state lock, and a queued run costs no
+Actions minutes.
+
+## The stages
+
+| Stage | Capability | What it does |
+|---|---|---|
+| `capacity-gate` | HOSTED | Sums provisioned DynamoDB capacity across every table in the account and region, and fails above a threshold (default 20 of the 25-unit always-free allowance). |
+| `ensure-secrets` | HOSTED | Creates `/{{ project_slug }}/<environment>/session_secret` as a SecureString **if it is absent**. Never rotates. |
+| `terraform-apply` | HOSTED | `init` against this environment's state key, `plan` to a file, `apply` that file. |
+{% if needs_datastore %}
+| `seed` | DATABASE | Reseeds the staging table from a sanitized export of the production table. Staging only. |
+{% endif %}
+| `smoke-test` | HOSTED | Polls the deployed health path with bounded backoff and fails the job if it never answers. |
+
+### Why `capacity-gate` runs even without a datastore
+
+DynamoDB's always-free allowance is 25 read and 25 write units shared by every
+table in the whole account. `terraform-modules`' `cost_acknowledged`
+precondition sees one table's own numbers, so five projects can each pass at 6
+units and collectively sit at 30. This stage is the only place that sees the
+sum, so it runs on every hosted deploy — including a deploy of a project that
+owns no tables, because the account it is deploying into is the same account.
+
+### Why `ensure-secrets` never rotates
+
+Regenerating the session secret on every deploy invalidates every active
+session, so everyone is logged out each time the project ships. It is created
+once per environment and left alone after that; rotation is a deliberate act —
+delete the parameter and redeploy.
+{% if needs_datastore %}
+
+### `seed` refuses until this project supplies a sanitizer
+
+Production data may only reach staging through `scripts/sanitize-seed.js`, a
+file this project writes. The template cannot know which attributes are
+personal data, and a seed stage that silently copies real data is worse than
+no seed stage.
+
+Until that file exists the stage copies **nothing**, says so as a warning and
+in the job summary, and lets the deploy continue — staging runs against an
+empty table. It does not fail the deploy, because staging with no data is a
+working staging. Start from `scripts/sanitize-seed.example.js`.
+
+The sanitizer takes one item in DynamoDB's `AttributeValue` form and returns a
+new item to keep, or `null` to drop it. Returning the object it was handed is
+refused: `item => item` copies production verbatim and nothing else could tell
+it apart from a real sanitizer.
+
+Export is a `Scan`, not a point-in-time export — PITR bills per GB-month and
+scanning a small table costs a handful of read units. Items are sanitized page
+by page, so raw production data is never accumulated, never written to disk and
+never uploaded as an artifact.
+{% endif %}
+
+## `deploy-result.json` — the result contract
+
+Every run uploads an artifact named **`deploy-result`** containing a single
+file, `deploy-result.json`. It is written on the failure path as well as the
+success path, because a failed deploy still has to report something.
+
+```json
+{
+  "environment": "staging",
+  "url": "https://abc123.lambda-url.{{ aws_region }}.on.aws/",
+  "sha": "0f4c1d2e...",
+  "status": "success"
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `environment` | string | Exactly the `environment` input. |
+| `url` | string | The deployed Function URL. **Empty** when the run failed before `terraform-apply` produced one. |
+| `sha` | string | The commit that was actually deployed — `git rev-parse HEAD` after checkout, not the dispatching sha, which differ whenever `ref` is supplied. |
+| `status` | string | `success`, `failure` or `cancelled`. |
+
+**This is a consumed contract.** The orchestrator polls the run and reads this
+artifact to comment on the Jira ticket, so the four key names are an interface
+with something outside this repository. Add fields freely; do not rename or
+remove one without changing its consumer.
+
+A named artifact rather than job outputs, because reading a job's outputs back
+across the REST API is awkward while an artifact is one download with a stable
+name.
+
+## What the deploy role needs
+
+Beyond the permissions Terraform needs to manage this project's own resources:
+
+| Action | Scope | Used by |
+|---|---|---|
+| `dynamodb:ListTables` | `*` — the point is that it is account-wide | `capacity-gate` |
+| `dynamodb:DescribeTable` | `*` | `capacity-gate` |
+| `ssm:GetParameter`, `ssm:PutParameter` | `/{{ project_slug }}/<environment>/*` | `ensure-secrets` |
+| `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` | the shared state bucket, `{{ project_slug }}/*` prefix only | `terraform-apply` |
+| `s3:ListBucket` | the shared state bucket | `terraform-apply` |
+{% if needs_datastore %}
+| `dynamodb:Scan` | `{{ project_slug }}-production-items` | `seed`, from the **staging** role |
+| `dynamodb:Scan`, `dynamodb:BatchWriteItem`, `dynamodb:DescribeTable` | `{{ project_slug }}-staging-items` | `seed` |
+{% endif %}
+
+`ensure-secrets` deliberately does not decrypt the parameter it checks for —
+it only asks whether it exists — so the deploy role needs no `kms:Decrypt`.
+{% if needs_datastore %}
+
+Note the one asymmetry: seeding means the **staging** role can read the
+production table. That is inherent to seeding staging from production, and it
+is why the permission is scoped to `Scan` on that one table rather than to the
+production prefix.
+{% endif %}
+
+## Running one stage by itself
+
+Each stage is a directory under `.github/actions/` with its own `action.yml`,
+so a throwaway workflow can call just one:
+
+```yaml
+- uses: ./.github/actions/capacity-gate
+  with:
+    threshold: '20'
+```
+
+The stages that are more than a few lines of shell are Node scripts with no
+dependencies, so they also run directly:
+
+```bash
+node .github/actions/capacity-gate/capacity.js --threshold 20
+```
+
+Their tests live beside them and run as CI's `pipeline-stages` job:
+
+```bash
+npm test --prefix .github/actions
+```

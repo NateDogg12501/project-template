@@ -12,8 +12,8 @@ preset `{{ flavor }}`. Capabilities this project was generated with:
 |---|---|---|
 | API | {% if needs_api %}yes{% else %}no{% endif %} | {% if needs_api %}`backend/` (incl. `backend/test/`), `docker-compose.yml`, `scripts/setup-worktree-env.js`, the `backend` CI job{% else %}— (no server; nothing serves `frontend/`){% endif %} |
 | UI | {% if needs_ui %}yes{% else %}no{% endif %} | {% if needs_ui %}`frontend/` (incl. `frontend/test/`), the `frontend` CI job{% else %}— (API-only project){% endif %} |
-| HOSTED | {% if needs_hosting %}yes{% else %}no{% endif %} | {% if needs_hosting %}`terraform/` (environment-parameterized, state in the shared bucket every project uses), `backend/scripts/build-lambda.js`, the `terraform` CI job{% else %}— (local-only){% endif %} |
-| DATABASE | {% if needs_datastore %}yes{% else %}no{% endif %} | {% if needs_datastore %}the DynamoDB module + IAM policy in `terraform/` (covered by the `terraform` CI job), plus `dynamodb-local` in `docker-compose.yml`, `backend/src/dynamodb.js` + `init-table.js`, and `backend/test/integration/` — its own `datastore` CI job{% else %}— (no persistent store){% endif %} |
+| HOSTED | {% if needs_hosting %}yes{% else %}no{% endif %} | {% if needs_hosting %}`terraform/` (environment-parameterized, state in the shared bucket every project uses), `backend/scripts/build-lambda.js`, the `terraform` CI job, and the deploy pipeline — `.github/workflows/deploy.yml` plus the `capacity-gate`, `ensure-secrets`, `terraform-apply` and `smoke-test` stages in `.github/actions/`, tested by the `pipeline-stages` CI job{% else %}— (local-only){% endif %} |
+| DATABASE | {% if needs_datastore %}yes{% else %}no{% endif %} | {% if needs_datastore %}the DynamoDB module + IAM policy in `terraform/` (covered by the `terraform` CI job), plus `dynamodb-local` in `docker-compose.yml`, `backend/src/dynamodb.js` + `init-table.js`, and `backend/test/integration/` — its own `datastore` CI job. It also contributes the `seed` deploy stage, which rides `pipeline-stages`{% else %}— (no persistent store){% endif %} |
 
 **Turning a capability on later is a `copier update`, not a hand-build.** Edit
 the flag in `.copier-answers.yml` and re-run `copier update`; the capability's
@@ -41,7 +41,9 @@ docker compose up -d --wait dynamodb-local && AWS_ENDPOINT_URL_DYNAMODB=http://l
 npm test --prefix frontend             # UI tests (vitest + jsdom)
 {% endif %}
 {% if needs_hosting %}
-npm run build:lambda --prefix backend  # stage dist-lambda/ for terraform apply
+gh workflow run deploy.yml --field environment=staging  # the normal way to deploy — see docs/deploy.md
+npm test --prefix .github/actions      # deploy stage tests (vitest, no AWS)
+npm run build:lambda --prefix backend  # stage dist-lambda/ for a by-hand terraform apply
 terraform -chdir=terraform init -backend-config="key={{ project_slug }}/staging/terraform.tfstate"
 terraform -chdir=terraform apply -var="environment=staging"  # swap staging for production to target the other env
 {% endif %}
@@ -84,6 +86,36 @@ see `terraform/README.md`. Every apply also takes `-var="environment=..."`,
 validated in `variables.tf` against the declared environment list; there's no
 default, so an apply that doesn't say which environment fails immediately
 instead of picking one silently.
+
+### `deploy.yml` sequences stages; the stages hold the logic
+
+`.github/workflows/deploy.yml` is dispatched with an `environment` input and
+does nothing but call composite actions from `.github/actions/` in order. **If
+you find yourself writing more than a few lines of shell in the workflow, it
+belongs in a stage** — that is what keeps each one separately runnable and
+separately testable, and the stage tests are the only place a check like
+`capacity-gate` is ever seen to fail. Full contract in
+[docs/deploy.md](docs/deploy.md).
+
+Three things there are load-bearing and easy to undo by accident:
+
+- **`terraform apply` applies a saved plan file.** A bare `apply` re-plans, so
+  what runs stops being what was reviewed in the log above it.
+- **`deploy-result.json` is uploaded on the failure path too.** It is read by
+  something outside this repository, which is waiting on it either way.
+- **`ensure-secrets` never rotates.** Regenerating `session_secret` on every
+  deploy logs every user out on every ship.
+{% if needs_datastore %}
+
+### Staging starts empty, and that is the seed stage working
+
+`seed` refuses to copy anything out of the production table until this project
+provides `scripts/sanitize-seed.js` — the template can't know which attributes
+are personal data, and a seed that guesses is a disclosure. Until that file
+exists the stage warns, writes the reason into the job summary, and lets the
+deploy carry on. **An empty staging table is the expected state of a new
+project, not a bug to chase.** Start from `scripts/sanitize-seed.example.js`.
+{% endif %}
 {% endif %}
 {% if needs_datastore %}
 
@@ -127,6 +159,15 @@ What ships with the scaffold, all of it real and all of it passing:
 - `frontend/test/` — vitest with the jsdom environment, driving the real
   `index.html` rather than a fixture, so a change to the markup that breaks
   `app.js` fails here.
+{% endif %}
+{% if needs_hosting %}
+
+- `.github/actions/*/test/` — the deploy stages, run by the `pipeline-stages`
+  job. Every stage that talks to AWS takes its runner as a parameter
+  (`lib/aws.js`), so pagination, retries and refusals are asserted against
+  recorded calls instead of an account. The one that matters most is
+  `capacity-gate` failing over its threshold: a gate whose failing path has
+  never run is a gate that has only ever been observed to pass.
 {% endif %}
 
 [Expand: what's tested beyond the smoke tests, and what's deliberately not.]
