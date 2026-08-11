@@ -10,3 +10,8 @@ terraform.tfstate.backup
 # Written locally, holding the full state, when a *remote* state push fails.
 errored.tfstate
 .terraform.tfstate.lock.info
+# Saved plan file, and the deploy result written beside it. Both describe one
+# deploy run rather than the repository; deploy.yml uploads the second as an
+# artifact and deletes the first.
+tfplan
+deploy-result.json

@@ -23,6 +23,12 @@ _tasks:
     when: "{{ _copier_operation == 'copy' and needs_api }}"
   - command: "npm install --prefix frontend"
     when: "{{ _copier_operation == 'copy' and needs_ui }}"
+  # The deploy pipeline's stages are their own package: application code never
+  # imports them, and they ship a devDependency (vitest) that nothing at deploy
+  # time needs. The stages themselves run on the runner's Node with no install;
+  # this lock file is for CI's `pipeline-stages` job, which runs their tests.
+  - command: "npm install --prefix .github/actions"
+    when: "{{ _copier_operation == 'copy' and needs_hosting }}"
   - command: "git add -A"
     when: "{{ _copier_operation == 'copy' }}"
   - command: >-

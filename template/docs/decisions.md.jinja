@@ -25,4 +25,21 @@ across every project generated from this template, keyed
 project owns or manages. Isolation from other projects in the bucket is this
 project's deploy role, scoped to its own `{{ project_slug }}/*` prefix. See
 `terraform/README.md`.
+**Consequence:** deploys go through `.github/workflows/deploy.yml`, which
+sequences the stages in `.github/actions/` — see `docs/deploy.md`. Any deploy
+step this project needs that the template doesn't have is a new stage there,
+gated on the capability that owns it, with its own test.
+{% endif %}
+{% if needs_datastore %}
+
+## Staging starts with no data
+**Context:** the `seed` deploy stage reseeds staging from production, and this
+project's production data is real.
+**Decision:** it copies nothing until `scripts/sanitize-seed.js` exists here.
+**Why:** the template cannot know which of this project's attributes are
+personal data, so it refuses rather than guessing. Writing that sanitizer —
+and deciding what staging is allowed to know — is a decision this project owes
+its own entry for, above this line, when it makes it.
+**Consequence:** until then an empty staging table is the expected state, not
+a bug. Start from `scripts/sanitize-seed.example.js`.
 {% endif %}

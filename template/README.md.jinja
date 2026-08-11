@@ -41,7 +41,23 @@ Terraform module{% if needs_datastore %}, with data in DynamoDB via
 with Terraform state in the S3 bucket shared across every project generated
 from this template. Stays inside AWS Always Free.
 
+Deploys run in GitHub Actions, over OIDC — there are no AWS keys in this
+repository:
+
 ```bash
+gh workflow run deploy.yml --field environment=staging
+```
+
+`.github/workflows/deploy.yml` checks account-wide DynamoDB capacity, creates
+this environment's session secret if it is missing, applies Terraform,{% if needs_datastore %}
+reseeds the staging table from sanitized production data,{% endif %} and fails the run if
+the deployed URL doesn't answer. Every run uploads a `deploy-result` artifact
+saying what was deployed and where. See [`docs/deploy.md`](docs/deploy.md).
+
+To apply by hand instead — for a first look, or when Actions is not an option:
+
+```bash
+npm run build:lambda --prefix backend
 cd terraform
 terraform init -backend-config="key={{ project_slug }}/staging/terraform.tfstate"
 terraform apply -var="environment=staging"

@@ -1,0 +1,26 @@
+name: Ensure secrets
+description: >-
+  Creates this project's SESSION_SECRET in SSM Parameter Store if it is absent,
+  and leaves it alone if it is present. Never rotates: regenerating on every
+  deploy would log every user out each time the project ships.
+
+  Shared credentials (/shared/auth_*) are not created here — they belong to the
+  one-time account bootstrap, not to any project's deploy.
+
+inputs:
+  parameter-name:
+    description: >-
+      Full SSM path of the secret, e.g. /my-project/staging/session_secret. A
+      path rather than a fixed convention on purpose: moving a project onto a
+      differently-scoped secret later should be a value change, not a code
+      change.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Create the session secret if it does not exist
+      shell: bash
+      env:
+        PARAMETER_NAME: ${{ inputs.parameter-name }}
+      run: node "$GITHUB_ACTION_PATH/secret.js"

@@ -110,6 +110,39 @@ as the worked example.
   and correspondingly no deploy credentials at all — see
   [`docs/cd-pipeline.md`](docs/cd-pipeline.md) B3.
 
+### Deploying is composed stages, and the workflow holds none of the logic
+
+A hosted project deploys through `.github/workflows/deploy.yml`, which is
+dispatched (never `on: push`) with an `environment` input and does nothing but
+sequence composite actions from `.github/actions/`. Anything longer than a few
+lines of shell belongs in a stage.
+
+- **No AWS keys, anywhere.** The workflow assumes a per-environment role over
+  OIDC. The role ARNs are repository *variables*, and a missing one fails the
+  run rather than falling back to the other environment's role.
+- **`terraform apply` applies a saved plan file**, never a bare `apply`, so
+  what executes is what was planned and printed.
+- **A deploy that applied cleanly and serves 502 is a failed deploy.** The
+  `smoke-test` stage is what makes that true; without it a ticket reaches
+  review pointing at a broken URL, which looks exactly like success. Its poll
+  is bounded — Actions minutes are capped and nothing may idle.
+- **Every run uploads a `deploy-result` artifact** holding
+  `{ environment, url, sha, status }`, on the failure path as well as the
+  success path. It is read outside the repository by the orchestrator, so it is
+  an interface: add fields, don't rename them. Each project's
+  `docs/deploy.md` is the copy of the contract that travels with it.
+- **The account-wide cost gate runs before every apply.** `cost_acknowledged`
+  in `terraform-modules` sees one module's own numbers; `capacity-gate` sums
+  provisioned DynamoDB capacity across the whole account and region, which is
+  the only thing that can catch five projects each passing at 6 units of a
+  shared 25. It fails closed: an API call it cannot make is a failed deploy,
+  never an empty account.
+- **Production data reaches a lower environment only through a sanitizer the
+  project itself writes.** The template cannot know which attributes are
+  personal data, so the `seed` stage copies nothing at all until that file
+  exists, and says so loudly rather than failing the deploy. A seed step that
+  silently copies real data is worse than no seed step.
+
 ### Enforcement: pinned module sources
 
 The `terraform` CI job in every generated project fails when a `source =` in
@@ -333,17 +366,18 @@ So:
 A project is not a *kind*; it is a *set of capabilities*. Each one is a
 single boolean in `copier.yml`, independently on or off:
 
-| Capability | Question | Means |
-|---|---|---|
-| API | `needs_api` | An Express backend in `backend/`, run by docker compose. |
-| UI | `needs_ui` | Static files in `frontend/`. |
-| HOSTED | `needs_hosting` | Deployed to AWS Lambda on Always Free, via `terraform/`. |
-| DATABASE | `needs_datastore` | DynamoDB — the shared `dynamodb-single-table` Terraform module when deployed, `dynamodb-local` via docker compose when run locally, both behind the one client module in `backend/src/`. |
+| Capability | Question | Means | Pipeline stages |
+|---|---|---|---|
+| API | `needs_api` | An Express backend in `backend/`, run by docker compose. | — |
+| UI | `needs_ui` | Static files in `frontend/`. | — |
+| HOSTED | `needs_hosting` | Deployed to AWS Lambda on Always Free, via `terraform/`. | `capacity-gate`, `ensure-secrets`, `terraform-apply`, `smoke-test` |
+| DATABASE | `needs_datastore` | DynamoDB — the shared `dynamodb-single-table` Terraform module when deployed, `dynamodb-local` via docker compose when run locally, both behind the one client module in `backend/src/`. | `seed` |
 
-### The contract: a capability owns its files, its tests, and its CI job
+### The contract: a capability owns its files, its tests, its CI job, and its pipeline stages
 
-All three travel together. A capability is not finished — is not *a
-capability* — until all three exist. Concretely, to add one:
+All four travel together. A capability is not finished — is not *a
+capability* — until all four exist (a capability that deploys nothing has no
+stages, which is a real answer, not a missing one). Concretely, to add one:
 
 1. **Files.** Everything it contributes, gated by *path name*: a directory
    or file under `template/` literally named
@@ -356,6 +390,16 @@ capability* — until all three exist. Concretely, to add one:
    capability's suite.
 3. **A CI job.** Its own job in `template/.github/workflows/ci.yml.jinja`,
    gated on the same flag.
+4. **Its pipeline stages**, if deploying the project needs it to do something.
+   A stage is a composite action in
+   `template/.github/{{ 'actions' if needs_hosting else '' }}/<stage>/`, called
+   from `deploy.yml` in a step gated on the same flag. It takes everything it
+   needs as inputs — a stage that reads a repository variable or a project
+   name directly is one that cannot be run on its own, and being separately
+   runnable is the whole reason these are actions rather than one script.
+   Stages carry their own tests under item 2, which is what makes a *check*
+   like `capacity-gate` provable: a gate whose failing path has never been
+   exercised is a gate that has only ever been observed to pass.
 
 Not every job belongs to a capability, though — `ci.yml.jinja` also has
 **ungated jobs owned by the template itself**, for files every project gets
@@ -365,10 +409,13 @@ An ungated job needs that justification: it is for content that renders
 unconditionally, and there is genuinely no flag to gate it on. "I couldn't
 decide which capability owns it" is not that justification.
 
-**Why the three-part rule and not just "files":** the template shipped a
+**Why the four-part rule and not just "files":** the template shipped a
 `frontend/` for months that no CI job ever touched, because nothing forced
 the files and the job to arrive together. Files are the part you notice
-missing; the CI job is the part you don't.
+missing; the CI job is the part you don't. Stages are the same shape of
+mistake one layer out — a capability that provisions something and contributes
+nothing to the deploy is one whose infrastructure only exists on the laptop of
+whoever last ran `terraform apply` by hand.
 
 ### Dependencies between capabilities
 

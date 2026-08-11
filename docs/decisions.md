@@ -893,3 +893,202 @@ recreating them — is real work belonging to whichever phase migrates that
 project (`kids-ledger`'s is P10), not something this change does implicitly.
 The exact `terraform init -backend-config` invocation a deploy job must use:
 `terraform init -backend-config="key=<project_slug>/<environment>/terraform.tfstate"`.
+
+## 2026-08-10: The deploy is composed stages now; the stage registry is deferred
+**Context:** P04 had to write `deploy.yml` for hosted projects. The same logic
+could have been one shell script inside the workflow, five composite actions
+called from a thin workflow, or a declarative capability-to-stage registry that
+assembles the workflow from a manifest.
+**Decision:** five composite actions under the HOSTED-gated
+`template/.github/actions/`, called in order by a `deploy.yml` that contains
+sequencing and no logic. **No registry.**
+**Why not one script:** composing costs essentially nothing to do up front, and
+retrofitting it later means rewriting a workflow that by then has real
+behaviour in it. It is also what lets `capacity-gate`'s failing path be tested
+at all — a stage is a unit; a section of a 200-line shell script is not.
+**Why not the registry now:** a manifest saying "DATABASE contributes `seed`"
+plus machinery to assemble a workflow from it is a real extension point with
+exactly one consumer. Designing an extension point against a single example is
+how extension points end up wrong. Stages are *separable* — that property is
+what keeps the door open — but nothing declares them. The second and third
+capability that wants a stage are what should decide the manifest's shape.
+**Consequence:** adding a stage today means adding a directory and a step in
+`deploy.yml`, by hand, in that order. That is deliberate, and it is recorded
+here so a future session reads it as deferred rather than forgotten. If a third
+capability arrives wanting a stage and the `deploy.yml` step list is starting to
+look like data, that is the signal.
+
+## 2026-08-10: Pipeline stages are the fourth thing a capability owns
+**Context:** STANDARDS.md's capability contract was three parts — files, tests,
+a CI job. The deploy pipeline gave capabilities a fourth thing to contribute,
+and nothing said it had to travel with the other three.
+**Decision:** extend the contract to four items and add a "Pipeline stages"
+column to the capability table. HOSTED owns `capacity-gate`, `ensure-secrets`,
+`terraform-apply` and `smoke-test`; DATABASE owns `seed`.
+**Why:** the original three-part rule exists because the template once shipped
+a `frontend/` that no CI job touched — files are the part you notice missing,
+the job is the part you don't. A capability that provisions infrastructure and
+contributes nothing to the deploy is the same mistake one layer out: its
+infrastructure exists only on the laptop of whoever last ran `terraform apply`.
+**Why not leave it implicit:** "a capability owns its stages" is only
+load-bearing if it is written where someone adding a capability will read it.
+**Consequence:** a capability with nothing to do at deploy time now has to say
+so — "—" in the table is an answer, not an omission. API and UI are both that
+case today.
+
+## 2026-08-10: The stage package uses vitest, at the cost of a third npm package
+**Context:** `capacity-gate` needs a test proving it fails over threshold, and
+STANDARDS.md requires one test runner across the stack plus a
+`vitest.config.js` per package. The stages are CI tooling rather than
+application code, and they run on the runner's Node with no install at all.
+**Decision:** `.github/actions/` is its own npm package — `package.json`,
+`vitest.config.js`, one `test/` per stage — with `vitest` as its only
+dependency, a `pipeline-stages` CI job that runs it, and a `copier.yml` task
+that installs it at scaffold time so the lock file is in the first commit.
+**Why not `node --test`:** it is built in and would have cost nothing, but it
+would put a second test runner in a project whose standards say one. A future
+session reading STANDARDS.md would be right to "fix" it, and the deviation
+would have to be re-argued every time. The dependency is a devDependency in a
+directory the application never imports; the deploy path itself stays
+dependency-free, which was the real requirement.
+**Why not fold the tests into `backend/`:** the contract says a capability's
+tests are its own and not folded into another's suite. HOSTED's stages tested
+by API's suite is exactly that.
+**Consequence:** hosted projects carry a third `package-lock.json` and one more
+CI job. `npm test --prefix .github/actions` is part of the scaffold's green
+suite.
+
+## 2026-08-10: `capacity-gate` is gated on HOSTED, not on DATABASE
+**Context:** the stage counts DynamoDB capacity, so DATABASE looks like its
+owner. But it runs on every hosted deploy, including projects with no tables.
+**Decision:** HOSTED owns it, and every hosted deploy runs it.
+**Why:** the allowance it protects is account-wide, and the gate's whole reason
+for existing is that no single project can see the total. Scoping it to
+projects that happen to own a table would mean it only runs where the
+per-module `cost_acknowledged` precondition already runs, which is precisely
+the hole it was written to close.
+**What it costs, named:** a project owning no DynamoDB table can have its
+deploy refused because a *different* project is over the line. That is the
+intended behaviour — the account is the thing being protected, and any deploy
+is an opportunity to notice — but it is a surprising failure to hit, so the
+breakdown names every table holding units and the message says what to do.
+**Consequence:** the deploy role of every hosted project needs
+`dynamodb:ListTables` and `dynamodb:DescribeTable` at account scope, whether or
+not that project uses DynamoDB. Reported to P09.
+
+## 2026-08-10: `seed` refuses to copy anything until a project writes a sanitizer
+**Context:** the seed stage reseeds staging from production. The flagship
+project's production data is children's names and transaction history. The
+template cannot know which attributes are sensitive — that is per-project
+knowledge — so it cannot write the sanitization itself.
+**Decision:** the stage looks for `scripts/sanitize-seed.js` in the project. If
+it is absent, **nothing is read out of the production table at all**: the stage
+warns, writes the refusal to the job summary, sets `seeded=false`, and lets the
+deploy continue. A sanitizer that exists but exports no function *fails*, since
+that is a bug rather than an absence. Both refusals are decided before the
+first Scan, so a project that cannot sanitize never pulls the data out.
+**Why exit 0 rather than failing the deploy:** every freshly scaffolded
+DATABASE project is in this state by construction. Failing would make the first
+staging deploy of every new project red, which trains people to ignore it.
+Staging against an empty table is a working staging; staging holding
+unsanitized production data is a disclosure. The refusal is loud in three
+places instead — annotation, job summary, and stage output.
+**Why not ship a working default sanitizer:** a default that guesses would be
+wrong silently, which is the failure mode the whole stage exists to avoid.
+`scripts/sanitize-seed.example.js` ships instead, and cannot run by accident
+because the stage looks for a different filename.
+**Consequence:** "staging is empty" is a normal state and has to stay
+documented as one, in `docs/deploy.md` and the generated `CLAUDE.md`. Also:
+seeding means the *staging* deploy role can `Scan` the production table. That
+is inherent to seeding from production and is scoped to that one action on that
+one table, but it is a real weakening of the environment boundary and P09 needs
+to know it is deliberate.
+
+## 2026-08-10: Seed items stay in DynamoDB AttributeValue form
+**Context:** a sanitizer would be pleasanter to write against plain JavaScript
+objects (`item.name`) than against `Scan` output (`item.name.S`). Unmarshalling
+would need either an AWS SDK dependency in the deploy path or a hand-written
+converter.
+**Decision:** items are handed to the sanitizer exactly as `Scan` returned them
+and written back exactly as `BatchWriteItem` wants them. No conversion.
+**Why not hand-write a converter:** DynamoDB numbers are arbitrary-precision
+decimal strings. `{ "N": "12345678901234567890" }` through a JavaScript number
+and back is a different value, and silently corrupting data while copying it is
+a worse outcome than an awkward shape — especially in the one code path whose
+job is to be trustworthy with real data. Binary attributes make it worse still.
+**Why not depend on `@aws-sdk/util-dynamodb`:** it would put an `npm ci` in the
+deploy path of every hosted project, for one stage, to save one dereference per
+attribute in one file per project.
+**Consequence:** `scripts/sanitize-seed.example.js` documents the shape, and
+the awkwardness is paid once per project rather than smoothed over by a
+converter nobody would think to test against a twenty-digit number.
+
+## 2026-08-10: A sanitizer that returns the item it was given is refused
+**Context:** the laziest possible sanitizer is `item => item`, and it copies
+production verbatim. Nothing downstream can distinguish it from a real one.
+**Decision:** `sanitizeAll` throws when the sanitizer returns the same object
+identity it was passed, with a message saying to build a new object.
+**Why not allow in-place mutation:** `delete item.child_name; return item` is a
+legitimate implementation and this rejects it, which is a real false positive.
+It is worth it: the cost is a one-line change with the fix stated in the error
+message, and the benefit is that the single most likely wrong implementation of
+a privacy-critical function cannot ship silently.
+**Consequence:** the contract is "return a new item", documented in the example
+sanitizer and in `docs/deploy.md`. Detecting a *semantically* identity-like
+sanitizer would be unsound, so this catches the literal case only and the
+comment says as much rather than implying broader protection.
+
+## 2026-08-10: The deploy result is an uploaded artifact, not job outputs
+**Context:** `idea-workflow` polls a deploy run and needs the deployed URL and
+commit to put in a Jira comment. Job outputs, a run annotation, a commit status
+and an uploaded artifact were all available.
+**Decision:** every run uploads a `deploy-result` artifact containing
+`deploy-result.json` — `{ environment, url, sha, status }` — on the failure
+path as well as the success path.
+**Why not job outputs:** reading a job's outputs back through the REST API is
+awkward — they are not on the run object, you walk jobs and steps — whereas an
+artifact is one download with a stable name and an obvious 404 when absent.
+**Why write it on failure too:** a failed deploy still has to say which
+environment and which commit, or the Jira comment carries nothing useful and a
+human has to open the run anyway.
+**Why `git rev-parse HEAD` and not `github.sha`:** `deploy.yml` takes an
+optional `ref`, and when it is supplied the dispatching sha is not the deployed
+sha. Reporting the wrong commit would be a plausible, silent lie — the
+expensive kind.
+**Consequence:** those four key names are an interface with a repository that
+cannot be grepped from here. `template/docs/deploy.md` is the copy of the
+contract that travels with each generated project, and P08 codes against it.
+Adding a field is additive; renaming one breaks a consumer that is not in this
+repo.
+
+## 2026-08-11: A production deploy refuses the `ref` input
+**Context:** `deploy.yml` takes an optional `ref` so a deploy can build
+something other than the ref it was dispatched against. Separately, B3 of
+`docs/cd-pipeline.md` states that "only main deploys to production" is
+enforced by AWS rather than by YAML: the production role's OIDC trust policy
+pins `repo:<org>/<repo>:ref:refs/heads/main`.
+**Decision:** a production deploy with a non-empty `ref` input fails, in the
+first step, before any role is assumed. Staging is unaffected.
+**Why:** the two features silently cancel each other out. The OIDC subject
+claim is built from `github.ref` — the ref the run was *dispatched* against —
+while the `ref` input is read only by `actions/checkout`. Dispatching against
+`main` satisfies the trust pin and hands over the production role; the input
+then decides what is actually built. AWS sees a compliant run and cannot tell
+the difference, so the guarantee the pin was supposed to make is gone. This
+was found reviewing the P04 diff, not by the pin failing — which is the point:
+it never would have.
+**Why in YAML, when the surrounding argument is that YAML is the weaker
+place to enforce this:** that argument holds for everything AWS *can* see. The
+ref-vs-input gap is the one part it structurally cannot, because both runs look
+identical from outside. A check in YAML is not a duplicate of the AWS pin here;
+it is the only cover for the case the pin misses.
+**Why a flat refusal and not "must be an ancestor of `main`":** ancestry is the
+more permissive rule and would allow redeploying an older `main` commit, but
+rollback is explicitly out of scope (`cd-pipeline.md`, fix forward) and the
+check would need a full-depth checkout to answer. When rollback arrives, this
+is the check to relax rather than delete.
+**Consequence:** the production dispatch is `gh workflow run deploy.yml --ref
+main --field environment=production` — the ref goes on `--ref`, never in
+`--field ref=`. P08's Phase D dispatches exactly that way. Recorded in the
+generated `CLAUDE.md` as an invariant, because the refusal reads like an
+arbitrary limit on a convenience input unless you know what it is covering.

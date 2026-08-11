@@ -28,8 +28,14 @@ module "app" {
   aws_region = var.aws_region
   source_dir = "${path.module}/../dist-lambda"
 
+  # The deploy pipeline's `ensure-secrets` stage creates
+  # /{{ project_slug }}/<environment>/session_secret before this applies, and
+  # leaves it alone on every deploy after the first. Uncomment to hand it to
+  # the Lambda — but note that a by-hand `terraform apply` has not run that
+  # stage, so create the parameter yourself first (terraform/README.md) or the
+  # plan fails on a parameter that isn't there.
   ssm_secret_env_vars = {
-    # APP_SECRET = "/{{ project_slug }}/${var.environment}/app_secret"
+    # SESSION_SECRET = "/{{ project_slug }}/${var.environment}/session_secret"
   }
 
   # The `=` padding is capability-dependent because `terraform fmt -check` is

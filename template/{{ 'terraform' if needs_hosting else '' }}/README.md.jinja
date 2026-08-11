@@ -21,6 +21,19 @@ resource names). `var.environment` (see `variables.tf`) is validated against
 that same list and has no default: every apply says explicitly which
 environment it's targeting.
 
+## The normal path is the deploy workflow, not this directory
+
+`gh workflow run deploy.yml --field environment=staging` runs everything below
+and rather more: the account-wide DynamoDB capacity gate, creating this
+environment's session secret if it is missing, building the Lambda artifact,
+`plan` to a file and `apply` of that file,{% if needs_datastore %} reseeding staging from
+sanitized production data,{% endif %} and a health check on the deployed URL. See
+[`../docs/deploy.md`](../docs/deploy.md).
+
+What follows is the by-hand path — useful for a first look or a `destroy`, and
+the thing the workflow's `terraform-apply` stage automates. Applying by hand
+skips the capacity gate and the secret creation, so read step 2.
+
 ## Before first `terraform apply`
 
 1. Build the Lambda artifact:
@@ -37,6 +50,11 @@ environment it's targeting.
    ```bash
    aws ssm put-parameter --name "/{{ project_slug }}/<environment>/..." --type SecureString --value "..."
    ```
+   The deploy workflow's `ensure-secrets` stage does this for
+   `session_secret` — create-if-absent, never rotating, since regenerating it
+   would log every user out on every deploy. A by-hand apply has not run that
+   stage, so an uncommented `ssm_secret_env_vars` entry fails the plan until
+   the parameter exists.
 3. Init against the environment you're deploying, then apply:
    ```bash
    cd terraform
