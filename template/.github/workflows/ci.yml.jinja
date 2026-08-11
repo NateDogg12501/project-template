@@ -64,15 +64,20 @@ jobs:
   # its tests, and its CI job".{% endif +%}
   terraform:
     runs-on: ubuntu-latest
+    # `id-token` is for the per-environment plan below, which assumes an AWS
+    # role via OIDC — see the step comment for why the staging role covers
+    # every environment's plan. Once `permissions` is set, unlisted scopes
+    # default to none, so `contents: read` (checkout) needs restating.
+    permissions:
+      id-token: write
+      contents: read
     defaults:
       run:
         working-directory: terraform
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
-      # `-recursive` is what reaches bootstrap/ — a bare `fmt` reads one
-      # directory. Before any `init`, so it never formats fetched module code.
-      - run: terraform fmt -check -recursive
+      - run: terraform fmt -check
       - name: Terraform derives from terraform-modules
         # Every module source must be a tag-pinned reference to the shared
         # module repo: a root config wires pinned modules together, it does not
@@ -91,14 +96,13 @@ jobs:
           # registry module source still fails.
           providers='source[[:space:]]*=[[:space:]]*"[a-z0-9-]+/[a-z0-9-]+"[[:space:]]*(#.*)?$'
           # `grep -r --include`, not a shell glob: Actions' bash has globstar
-          # off, so `terraform/**/*.tf` collapses to `terraform/*/*.tf` — it
-          # would find bootstrap/main.tf and miss main.tf and backend.tf.
+          # off, so `terraform/**/*.tf` collapses to `terraform/*/*.tf`.
           # The `|| true`s are load-bearing: grep exits 1 on no match, which
           # under `pipefail` includes the *success* case of the filters below.
           found=$(grep -rnE '^[[:space:]]*source[[:space:]]*=' --include='*.tf' --exclude-dir=.terraform . || true)
           # A grep that matches nothing is otherwise green. Every hosted project
-          # has at least module "app" and module "tf_state", so zero pinned
-          # sources means this check has stopped looking in the right place.
+          # has at least module "app", so zero pinned sources means this check
+          # has stopped looking in the right place.
           if ! printf '%s\n' "$found" | grep -qE "$modules"; then
             echo "::error::found no tag-pinned terraform-modules source at all — this check is looking in the wrong place, or matching the wrong shape. A gate that can only pass is not a gate."
             exit 1
@@ -111,15 +115,62 @@ jobs:
           fi
       - run: terraform init -backend=false
       - run: terraform validate
-      # `terraform validate` does not recurse — bootstrap/ is a separate root
-      # config with its own state and needs its own init+validate. `cd` rather
-      # than a step-level `working-directory:`, whose resolution relative to the
-      # job default is not worth depending on.
-      - name: init + validate bootstrap
+      # Plans against every declared environment on pull requests, so a
+      # broken config is caught at PR time rather than at deploy time. Every
+      # environment's plan assumes the *staging* role, not each its own:
+      # production's OIDC trust policy pins `ref:refs/heads/main` (see
+      # docs/cd-pipeline.md B3 in project-template), which no pull-request
+      # branch can ever satisfy — there is no production role to assume from
+      # a PR in the first place, so staging's role is what plans both.
+      #
+      # `vars.AWS_ROLE_STAGING` doesn't exist until this project has been
+      # through per-project AWS provisioning. Every project generated before
+      # that step ran has no role — skip with a notice instead of failing
+      # red, and drop this guard once provisioning is universal.
+      - name: Check AWS_ROLE_STAGING is configured
+        if: github.event_name == 'pull_request'
+        id: role-check
         run: |
-          cd bootstrap
-          terraform init -backend=false
-          terraform validate
+          if [ -z "${{ '{{' }} vars.AWS_ROLE_STAGING }}" ]; then
+            echo "::notice::AWS_ROLE_STAGING repo variable is not set — this project hasn't been through per-project AWS provisioning yet. Skipping the per-environment plan."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: aws-actions/configure-aws-credentials@v4
+        if: github.event_name == 'pull_request' && steps.role-check.outputs.configured == 'true'
+        with:
+          role-to-assume: ${{ '{{' }} vars.AWS_ROLE_STAGING }}
+          aws-region: {{ aws_region }}
+      # `module.app`'s source_dir must exist before `terraform plan` — its
+      # `lifecycle.precondition` (terraform-modules' lambda-web-app module)
+      # fails the plan, not just the apply, on an empty or missing dist-lambda/.
+      - uses: actions/setup-node@v4
+        if: github.event_name == 'pull_request' && steps.role-check.outputs.configured == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Build the Lambda artifact
+        if: github.event_name == 'pull_request' && steps.role-check.outputs.configured == 'true'
+        working-directory: backend
+        run: |
+          npm ci
+          npm run build:lambda
+      - name: Plan every environment
+        if: github.event_name == 'pull_request' && steps.role-check.outputs.configured == 'true'
+        # `staging production` here mirrors variable "environment"'s
+        # validation in variables.tf — a third environment is a list entry in
+        # both places, not a redesign. `-reconfigure` is required to switch
+        # backend key mid-loop; plain `init` reuses whatever's already on disk.
+        run: |
+          set -euo pipefail
+          for env in staging production; do
+            echo "::group::plan ($env)"
+            terraform init -input=false -reconfigure -backend-config="key={{ project_slug }}/$env/terraform.tfstate"
+            terraform plan -input=false -var="environment=$env"
+            echo "::endgroup::"
+          done
 {% endif %}
 {% if needs_datastore %}
 

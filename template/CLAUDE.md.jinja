@@ -12,7 +12,7 @@ preset `{{ flavor }}`. Capabilities this project was generated with:
 |---|---|---|
 | API | {% if needs_api %}yes{% else %}no{% endif %} | {% if needs_api %}`backend/` (incl. `backend/test/`), `docker-compose.yml`, `scripts/setup-worktree-env.js`, the `backend` CI job{% else %}— (no server; nothing serves `frontend/`){% endif %} |
 | UI | {% if needs_ui %}yes{% else %}no{% endif %} | {% if needs_ui %}`frontend/` (incl. `frontend/test/`), the `frontend` CI job{% else %}— (API-only project){% endif %} |
-| HOSTED | {% if needs_hosting %}yes{% else %}no{% endif %} | {% if needs_hosting %}`terraform/` (incl. `terraform/bootstrap/`, which creates the S3 state bucket), `backend/scripts/build-lambda.js`, the `terraform` CI job{% else %}— (local-only){% endif %} |
+| HOSTED | {% if needs_hosting %}yes{% else %}no{% endif %} | {% if needs_hosting %}`terraform/` (environment-parameterized, state in the shared bucket every project uses), `backend/scripts/build-lambda.js`, the `terraform` CI job{% else %}— (local-only){% endif %} |
 | DATABASE | {% if needs_datastore %}yes{% else %}no{% endif %} | {% if needs_datastore %}the DynamoDB module + IAM policy in `terraform/` (covered by the `terraform` CI job), plus `dynamodb-local` in `docker-compose.yml`, `backend/src/dynamodb.js` + `init-table.js`, and `backend/test/integration/` — its own `datastore` CI job{% else %}— (no persistent store){% endif %} |
 
 **Turning a capability on later is a `copier update`, not a hand-build.** Edit
@@ -42,8 +42,8 @@ npm test --prefix frontend             # UI tests (vitest + jsdom)
 {% endif %}
 {% if needs_hosting %}
 npm run build:lambda --prefix backend  # stage dist-lambda/ for terraform apply
-# Once per project, before the first `terraform init` in terraform/:
-terraform -chdir=terraform/bootstrap init && terraform -chdir=terraform/bootstrap apply
+terraform -chdir=terraform init -backend-config="key={{ project_slug }}/staging/terraform.tfstate"
+terraform -chdir=terraform apply -var="environment=staging"  # swap staging for production to target the other env
 {% endif %}
 # [fill in: anything else — dev servers, data loading, one-off scripts]
 ```
@@ -73,12 +73,17 @@ own is not.
 The only carve-out is IAM that joins two modules, and this project has none.
 {% endif %}
 
-State lives in S3 (`terraform/backend.tf`), in the bucket `terraform/bootstrap/`
-creates. **Bootstrap is a separate root config with *local* state, applied once.**
-Don't collapse it into `terraform/` and don't move it onto the backend it
-creates — a config can't keep its state in a bucket it also manages. Its
-`terraform.tfstate` is gitignored; read `terraform/README.md` before deleting it,
-and before any `terraform destroy`, which has an order that matters.
+State lives in S3 (`terraform/backend.tf`), in **one bucket shared across every
+project generated from this template** — not a bucket this project owns.
+`backend.tf`'s `key` is deliberately omitted and supplied at `terraform init
+-backend-config="key={{ project_slug }}/<environment>/terraform.tfstate"`, since
+it's the one thing that varies per apply and backend blocks can't interpolate.
+Isolation from other projects sharing the bucket is this project's deploy role
+being scoped to its own `{{ project_slug }}/*` prefix, not a separate bucket —
+see `terraform/README.md`. Every apply also takes `-var="environment=..."`,
+validated in `variables.tf` against the declared environment list; there's no
+default, so an apply that doesn't say which environment fails immediately
+instead of picking one silently.
 {% endif %}
 {% if needs_datastore %}
 

@@ -88,39 +88,23 @@ needs_datastore:
   default: false
   when: "{{ needs_hosting }}"
 
-# HOSTED's two parameters. Both render into `terraform/` as *literals*, twice
-# each: `backend "s3"` cannot interpolate — no vars, no locals, no `${}` — so
-# the state bucket's name and region have to be written into backend.tf and
-# into bootstrap/main.tf from one answer. `aws_region` is also `variable
-# "aws_region"`'s default in the main config. Copier is the only layer that can
-# put one answer in two places, which is what a template is for.
+# This project's own AWS region — the Lambda, and `variable "aws_region"`'s
+# default in the main config. Deliberately NOT rendered into backend.tf's
+# `region`: the state bucket lives wherever the account-level bootstrap put
+# it (see STANDARDS.md's "Hosting"), which is fixed and shared across every
+# project regardless of any one project's chosen region, so backend.tf hard-
+# codes that region as its own literal instead of reusing this answer — a
+# project that picked a non-default `aws_region` would otherwise get a
+# backend block pointing at the wrong region for the shared bucket.
 #
-# Both are skipped when HOSTED is off, and a skipped question still resolves to
-# its default — so nothing can render undefined. What a skipped question does
-# not get is a line in `.copier-answers.yml`: a project that turns HOSTED on
-# later must set these there (or pass `--data`) in the same edit, or
-# `copier update` silently recomputes them as us-east-1.
-state_bucket_name:
-  type: str
-  help: >-
-    S3 bucket for this project's Terraform state, created once by
-    terraform/bootstrap/. Bucket names are a single global namespace across all
-    AWS accounts, so this has to be unique everywhere, not just in yours.
-  default: "{{ project_slug }}-tfstate"
-  when: "{{ needs_hosting }}"
-  validator: >-
-    {% if state_bucket_name | length < 3 or state_bucket_name | length > 63
-    or state_bucket_name != state_bucket_name | lower
-    or '_' in state_bucket_name %}S3 bucket names are 3-63 characters,
-    lowercase, and cannot contain underscores — a capitalised project_slug, or
-    a long one plus "-tfstate", overruns this. The s3-bucket module does not
-    validate the name, so the failure would otherwise land mid-apply as
-    InvalidBucketName.
-    {% endif %}
-
+# Skipped when HOSTED is off, and a skipped question still resolves to its
+# default — so nothing can render undefined. What a skipped question does not
+# get is a line in `.copier-answers.yml`: a project that turns HOSTED on later
+# must set this there (or pass `--data`) in the same edit, or `copier update`
+# silently recomputes it as us-east-1.
 aws_region:
   type: str
-  help: "AWS region for the Lambda, the state bucket, and the backend block."
+  help: "AWS region for the Lambda and other project-owned resources (not the shared state bucket, which lives in a fixed region)."
   default: "us-east-1"
   when: "{{ needs_hosting }}"
 

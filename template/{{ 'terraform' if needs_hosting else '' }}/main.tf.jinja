@@ -14,15 +14,22 @@ provider "aws" {
   region = var.aws_region
 }
 
+# Composed here, not in terraform-modules: the modules take app_name/table_name
+# as plain strings, so per-environment naming belongs to the root config that
+# knows the environment, not to a module that doesn't.
+locals {
+  name_prefix = "{{ project_slug }}-${var.environment}"
+}
+
 module "app" {
   source = "git::https://github.com/NateDogg12501/terraform-modules.git//modules/lambda-web-app?ref=v2.1.0"
 
-  app_name   = "{{ project_slug }}"
+  app_name   = local.name_prefix
   aws_region = var.aws_region
   source_dir = "${path.module}/../dist-lambda"
 
   ssm_secret_env_vars = {
-    # APP_SECRET = "/{{ project_slug }}/app_secret"
+    # APP_SECRET = "/{{ project_slug }}/${var.environment}/app_secret"
   }
 
   # The `=` padding is capability-dependent because `terraform fmt -check` is
@@ -47,7 +54,7 @@ module "app" {
 module "table" {
   source = "git::https://github.com/NateDogg12501/terraform-modules.git//modules/dynamodb-single-table?ref=v2.1.0"
 
-  table_name = "{{ project_slug }}-items"
+  table_name = "${local.name_prefix}-items"
   hash_key   = "id"
 
   attributes = [
@@ -56,7 +63,7 @@ module "table" {
 }
 
 resource "aws_iam_role_policy" "app_table_access" {
-  name = "{{ project_slug }}-table-access"
+  name = "${local.name_prefix}-table-access"
   role = module.app.lambda_role_name
 
   policy = jsonencode({
