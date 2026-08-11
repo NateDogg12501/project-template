@@ -818,3 +818,78 @@ Terraform schema (`terraform/main.tf`) are now two definitions of the same
 thing that must be changed together — named explicitly in the generated
 `CLAUDE.md` rather than hidden, because nothing here keeps them in sync
 automatically.
+
+## 2026-08-10: Environment-parameterized Terraform; one shared state bucket replaces per-project bootstrap
+**Context:** P03 of the four-repo CD pipeline (`docs/cd-pipeline.md` B1/B2).
+Generated `terraform/` had no concept of an environment — resource names were
+single literals — and each project created its own state bucket via
+`terraform/bootstrap/`, a directory whose only job was that bucket. The
+pipeline design settled on two environments per project (`staging`,
+`production`) and one shared state bucket for the whole account, created once
+in an account-level bootstrap outside this template (P02) rather than per
+project.
+**Decision:** added `variable "environment"` (`staging` | `production`, no
+default, validated) to `terraform/variables.tf`, composed at the root config
+into a `locals.name_prefix` used for `module.app`'s `app_name`,
+`module.table`'s `table_name`, and the IAM policy name — not passed into
+`terraform-modules`, which keeps taking plain strings. `terraform/backend.tf`
+became a partial `s3` backend: bucket (`natedogg12501-workflow-tfstate`,
+created by P02) and region are literals, `key` is omitted and supplied at
+`terraform init -backend-config="key=<project_slug>/<environment>/terraform.tfstate"`.
+Removed `state_bucket_name` and its validator from `copier.yml`, and deleted
+`terraform/bootstrap/` entirely — every README/CLAUDE.md reference to it
+rewritten to describe the shared bucket and IAM-prefix isolation instead. The
+`terraform` CI job gained a per-environment `terraform plan` step on pull
+requests, assuming `vars.AWS_ROLE_STAGING` via OIDC.
+**Why the exact bucket name is a literal here rather than a Copier answer:**
+one bucket, named once, ever — the global-namespace uniqueness problem
+`state_bucket_name`'s validator existed to catch is solved a single time, by
+whoever runs the account bootstrap, not by every project's `copier.yml`
+answer. See P02's handback for the bucket name and the account's
+provisioner-role/boundary/OIDC-provider ARNs, which P09 (per-project AWS
+provisioning) consumes.
+**Why `backend.tf`'s `region` is also a hardcoded literal (`us-east-1`)
+instead of rendering the project's own `aws_region` answer:** caught during
+review — the initial version reused `{{ aws_region }}` for both the backend's
+region and the project's own resource region, which was correct before this
+change (the project's own bootstrap created its bucket in that same region)
+but became a bug once the bucket moved to a fixed, externally-managed
+location. A project that picks a non-default `aws_region` for its Lambda
+would otherwise render a backend block pointing at the wrong region for the
+shared bucket, and `terraform init` would fail to find it.
+`copier.yml`'s `aws_region` question and its help text were updated to make
+clear it no longer has anything to do with the state bucket.
+**Why the `terraform` CI job also gained a Lambda build step:** caught during
+review — the new per-environment `terraform plan` step needs `dist-lambda/`
+to exist, since `lambda-web-app`'s `lifecycle.precondition` on
+`terraform_data.lambda_zip` fails during `plan`, not only `apply`, when
+`source_dir` is empty. Added `actions/setup-node@v4` + `npm ci` + `npm run
+build:lambda` (working directory `backend/`) before the plan loop, gated the
+same as the AWS steps so it only runs when a plan will actually happen.
+**Why the staging role plans every environment in CI, not each environment
+its own role:** production's OIDC trust policy (P09) pins
+`ref:refs/heads/main`, which no pull-request branch can ever satisfy — a
+production role literally cannot be assumed from a PR. Using staging's
+broader-trust role to plan against production's backend key is the only way
+a PR gets a real plan for both environments; it is not a permissions
+shortcut, it is the only role a PR is ever able to hold.
+**Why `variable "environment"` has no default:** the whole point of
+separating `staging` and `production` is that an apply says which one it's
+targeting. A default would mean an apply that forgot `-var="environment=..."`
+silently lands somewhere instead of failing immediately — the same reasoning
+`cost_acknowledged` uses for defaulting to `false`, applied to a different
+hazard.
+**Consequence:** a project generated before this change has no `environment`
+variable, a `state_bucket_name` answer in its `.copier-answers.yml` that no
+longer maps to anything in the template, and a `terraform/bootstrap/`
+directory `copier update` will not remove on its own (path-name gating
+prunes files that would otherwise render, not files a project already has on
+disk from a prior render — removing an existing directory is a manual step
+or a `_tasks` entry with `_copier_operation == 'update'`, neither added here
+since no project has gone through this update yet). Migrating an existing
+project — moving its state into the shared bucket, retiring its own bucket,
+threading `environment` through already-applied resource names without
+recreating them — is real work belonging to whichever phase migrates that
+project (`kids-ledger`'s is P10), not something this change does implicitly.
+The exact `terraform init -backend-config` invocation a deploy job must use:
+`terraform init -backend-config="key=<project_slug>/<environment>/terraform.tfstate"`.

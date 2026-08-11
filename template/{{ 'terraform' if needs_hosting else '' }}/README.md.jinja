@@ -4,8 +4,8 @@ Deploys {{ project_name }} to AWS Lambda via the shared
 [`lambda-web-app`](https://github.com/NateDogg12501/terraform-modules/tree/main/modules/lambda-web-app)
 module{% if needs_datastore %},
 [`dynamodb-single-table`](https://github.com/NateDogg12501/terraform-modules/tree/main/modules/dynamodb-single-table){% endif %},
-with state in S3 via
-[`s3-bucket`](https://github.com/NateDogg12501/terraform-modules/tree/main/modules/s3-bucket).
+with state in the S3 bucket shared across every project generated from this
+template — not a bucket this project owns.
 
 Every `source =` in here is a tag-pinned `terraform-modules` reference, and the
 `terraform` CI job fails if one isn't — add resources to that repo and release a
@@ -13,19 +13,19 @@ tag, not to this directory. See
 [STANDARDS.md](https://github.com/NateDogg12501/project-template/blob/main/STANDARDS.md)'s
 Hosting section.
 
+## Environments
+
+Every apply targets one environment — `staging` or `production` today —
+supplied both at `init` (which state key) and at `apply`/`plan` (which
+resource names). `var.environment` (see `variables.tf`) is validated against
+that same list and has no default: every apply says explicitly which
+environment it's targeting.
+
 ## Before first `terraform apply`
 
-1. Create the state bucket. Once per project, not once per deploy:
+1. Build the Lambda artifact:
    ```bash
-   cd bootstrap && terraform init && terraform apply && cd ..
-   ```
-   `bootstrap/` is a separate root config whose only job is that bucket, and its
-   own state is a local, gitignored file — a config that creates the state bucket
-   can't keep its state in it. **`terraform init` up here fails with
-   `NoSuchBucket` until this is done**, having changed nothing.
-2. Build the Lambda artifact:
-   ```bash
-   cd ../backend && npm run build:lambda
+   cd backend && npm run build:lambda
    ```
    This runs `backend/scripts/build-lambda.js`, which stages `backend/src`,
    production-only `node_modules`,{% if needs_ui %} `frontend/`'s static files (into
@@ -33,59 +33,54 @@ Hosting section.
    `run.sh` the Lambda Web Adapter execs. Re-run it after **any** {% if needs_ui %}backend or
    frontend{% else %}backend{% endif %} change — `terraform apply` zips this directory, it does not
    build it.
-3. Create every SSM parameter referenced in `main.tf`'s `ssm_secret_env_vars`:
+2. Create every SSM parameter referenced in `main.tf`'s `ssm_secret_env_vars`:
    ```bash
-   aws ssm put-parameter --name "/{{ project_slug }}/..." --type SecureString --value "..."
+   aws ssm put-parameter --name "/{{ project_slug }}/<environment>/..." --type SecureString --value "..."
    ```
-4. `terraform init && terraform apply`
+3. Init against the environment you're deploying, then apply:
+   ```bash
+   cd terraform
+   terraform init -backend-config="key={{ project_slug }}/staging/terraform.tfstate"
+   terraform apply -var="environment=staging"
+   ```
+   Swap `staging` for `production` to target the other environment — same
+   config, different backend key and `-var`. Switching environments in an
+   already-initialized directory needs `terraform init -reconfigure
+   -backend-config="key=..."` — plain `init` reuses the backend config already
+   on disk.
 
 `terraform apply` needs `python3` on PATH — the module zips the artifact with
 a helper script rather than `archive_file`, so `run.sh` keeps its executable
 bit even when the zip is built on Windows.
 
 To check syntax without AWS access, `terraform init -backend=false && terraform
-validate` — a plain `init` now contacts S3, and fails without credentials. That's
-what CI runs, in both this directory and `bootstrap/`.
+validate` — a plain `init` now contacts S3, and fails without credentials.
+CI always runs this. Once this project has been through per-project AWS
+provisioning, CI also plans against both environments' real state on every
+pull request — see `.github/workflows/ci.yml`'s `terraform` job.
 
 ## State
 
-State is at `terraform.tfstate` in the bucket `bootstrap/` created, named by
-`backend.tf`. Locking is `use_lockfile = true` — S3-native, so there's no
-DynamoDB lock table to provision or forget. Backend blocks can't interpolate, so
-the bucket name and region are literals in both `backend.tf` and
-`bootstrap/main.tf`, rendered from the same scaffold answers; change one and you
-change both.
+State for each environment is at
+`{{ project_slug }}/<environment>/terraform.tfstate` in the shared bucket,
+supplied as `backend.tf`'s `key` at `init` — backend blocks can't interpolate,
+so it can't be templated in directly. Locking is `use_lockfile = true` —
+S3-native, per key, so there's no DynamoDB lock table and no contention
+between environments or other projects sharing the bucket.
 
-Versioning is on, with the module's 90-day noncurrent-version expiry. That's
-recovery from a bad apply last week, not an archive of last year — and it's what
-keeps a bucket written on every apply from quietly outgrowing the 5GB free
-allowance.
-
-Losing `bootstrap/terraform.tfstate` breaks nothing that's deployed; the bucket
-and everything in it are untouched. What it costs you is management of the
-bucket: re-applying `bootstrap/` then fails with `BucketAlreadyOwnedByYou`.
-Either `terraform import` the module's resources back (`aws_s3_bucket.this`,
-`aws_s3_bucket_versioning.this`, and the SSE, ownership, public-access-block,
-`aws_s3_bucket_lifecycle_configuration.this[0]` and bucket-policy resources
-under `module.tf_state`, all keyed on the bucket name), or leave the bucket
-unmanaged — it costs nothing until you need to change it.
+Isolation from other projects in the same bucket is IAM, not bucket
+topology: this project's deploy role is scoped to `s3:*Object` on
+`arn:aws:s3:::<bucket>/{{ project_slug }}/*` and nothing wider. The bucket
+itself — creation, versioning, lifecycle policy — is managed outside this
+project, in the account-level bootstrap; there is nothing here to create,
+lose, or re-apply.
 
 ## Tearing it down
 
-Order matters and is not symmetric with setup:
-
-1. `terraform destroy` in **this** directory first.
-2. The state bucket deliberately survives — `force_destroy = false`, so
-   `destroy` in `bootstrap/` refuses a non-empty bucket. To actually remove it,
-   set `force_destroy = true` in `bootstrap/main.tf`, `apply`, then `destroy`.
-   Emptying it by hand is fiddlier than it looks: `aws s3 rm --recursive` leaves
-   noncurrent versions and delete markers behind, so the naive retry fails the
-   same way.
-
-**Destroying the bucket while this directory's state is still in it strands
-everything that state described** — the Lambda, the Function URL, the log group
-and any table keep existing, and nothing is left that knows about them. Nothing
-fails loudly when you do it in that order, which is the reason for this section.
+`terraform destroy -var="environment=<environment>"`, per environment. Unlike
+a per-project bucket, there's no second config to tear down afterward and no
+ordering to get wrong — the bucket outlives every project's `destroy` by
+construction.
 {% if needs_ui %}
 
 ## Adding static assets

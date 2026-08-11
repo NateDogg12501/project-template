@@ -114,8 +114,8 @@ Mechanically:
    capability with no tests stayed green for months).
 6. **A capability can also ask its own questions** — any `copier.yml`
    question accepts `when:`, the way `needs_datastore` only asks
-   `when: "{{ needs_hosting }}"`, and HOSTED's `state_bucket_name` /
-   `aws_region` do the same. Two things about a skipped question: it still
+   `when: "{{ needs_hosting }}"`, and HOSTED's `aws_region` does the same.
+   Two things about a skipped question: it still
    resolves to its rendered default, so no template can hit an undefined
    variable — but it gets **no line in `.copier-answers.yml`**. Turning the
    capability on later therefore recomputes those answers from their defaults,

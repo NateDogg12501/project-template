@@ -75,22 +75,40 @@ as the worked example.
 - **All Terraform in a generated project derives from
   [`terraform-modules`](../terraform-modules).** A root config wires pinned
   modules together and passes values between them; it does not declare AWS
-  resources of its own. Today that is `lambda-web-app`,
-  `dynamodb-single-table` and `s3-bucket`. Something the modules do not cover
-  is a change to *that* repo — a new module, or a new variable on an existing
-  one, released under a tag — not a resource block here. See its README for
-  the gotchas already solved there (Function URL permissions, provider
-  version, GSI key_schema bug) and its CHANGELOG for what a tag bump pulls in.
+  resources of its own. Today that is `lambda-web-app` and
+  `dynamodb-single-table` — `s3-bucket` is used too, but no longer by a
+  generated project's own `terraform/`: it's what creates the shared state
+  bucket in the account-level bootstrap that lives outside this template.
+  Something the modules do not cover is a change to *that* repo — a new
+  module, or a new variable on an existing one, released under a tag — not a
+  resource block here. See its README for the gotchas already solved there
+  (Function URL permissions, provider version, GSI key_schema bug) and its
+  CHANGELOG for what a tag bump pulls in.
 - **One project pins one tag across its whole config.** Every module `source`
   ends in the same `?ref=vX.Y.Z`, so upgrading is a single decision with a
   single changelog to read rather than a per-module archaeology exercise.
-- **State lives in S3, not on a laptop.** `terraform/bootstrap/` is a separate
-  root config, with local state, whose only job is creating the state bucket
-  with `s3-bucket`; `terraform/` then uses that bucket as an `s3` backend with
-  `use_lockfile = true` — S3-native locking, no DynamoDB lock table — which is
-  why generated configs require Terraform >= 1.10. Local state means no
-  locking, no history, and one lost file between a project and infrastructure
-  Terraform can no longer see or destroy.
+- **State lives in S3, in one bucket shared across every project.** Not a
+  bucket per project — one bucket, created once in an account-level
+  bootstrap outside this template, holding every project's state keyed
+  `<project_slug>/<environment>/terraform.tfstate`. `terraform/backend.tf` is
+  a partial `s3` backend: bucket and region are literals (backend blocks
+  cannot interpolate), and `key` is omitted from the file entirely and
+  supplied per apply — `terraform init
+  -backend-config="key=<project_slug>/<environment>/terraform.tfstate"` — since
+  it is the one thing that legitimately varies from one apply to the next.
+  `use_lockfile = true` is S3-native locking, per key, so concurrent applies
+  across projects and environments don't contend — no DynamoDB lock table,
+  which is why generated configs require Terraform >= 1.10.
+- **Isolation moved from bucket topology to IAM.** One shared bucket means a
+  misconfigured policy could, in principle, let one project read or write
+  another's state. The boundary is meant to be a prefix-scoped deploy role
+  per project — `s3:*Object` on `arn:aws:s3:::<bucket>/<project_slug>/*` and
+  nothing wider, created per project during AWS provisioning — not a bucket
+  per project. "Every project shares one bucket" reads as a downgrade until
+  you know the isolation moved one layer down rather than disappearing. A
+  project that hasn't been through that provisioning yet has no such role,
+  and correspondingly no deploy credentials at all — see
+  [`docs/cd-pipeline.md`](docs/cd-pipeline.md) B3.
 
 ### Enforcement: pinned module sources
 
@@ -159,6 +177,17 @@ numbers, not the account's. Every gate passing means no single resource
 knowingly left the free tier — not that the account is still inside it, since
 allowances like DynamoDB's are account-wide.
 
+**Environments multiply this.** Every hosted project now provisions its
+resources once per environment — `staging` and `production` both apply the
+same modules — so the account-wide total this gate structurally cannot see
+grows with every environment a project has, not just with every project.
+`cost_acknowledged` still only answers "is this one resource, in this one
+apply, inside the free tier" — it was never going to answer "is the account,"
+and environments are exactly what makes that gap bigger. Closing it is a
+deploy-pipeline concern, not a Terraform one — see
+[`docs/cd-pipeline.md`](docs/cd-pipeline.md)'s A1 and D14 for the account
+capacity gate that's designed to cover it.
+
 **Where the decision gets recorded depends on the stage.** This rule is enforced
 at two points, and "logged in `docs/decisions.md`" names the obligation to write
 the decision down — not that one filename everywhere:
@@ -171,6 +200,29 @@ the decision down — not that one filename everywhere:
 The architect gate fires before a project exists, so it has no
 `docs/decisions.md` to write into — the needs-decision file *is* the record at
 that stage. Both refuse to proceed silently; both hand the call to a human.
+
+## Environments
+
+Every hosted project has an ordered list of environments it deploys through —
+`staging` then `production`, today. `variable "environment"` in
+`terraform/variables.tf` is validated against that list and has no default:
+an apply that doesn't say which environment it targets fails immediately
+instead of picking one silently. It's composed into every resource name and
+SSM path at the root config —
+```hcl
+locals {
+  name_prefix = "${project_slug}-${var.environment}"
+}
+```
+not passed down into `terraform-modules`. The modules take `app_name` /
+`table_name` as plain strings, so per-environment naming is the root
+config's job, not a module's — no `terraform-modules` change is needed to
+add or rename an environment.
+
+**Nothing may assume exactly two.** The list is ordered — each environment
+promotes to the next — but code that works today with `staging` and
+`production` must keep working if a third name is inserted; a third
+environment is a list entry, not a redesign.
 
 ## Structure
 

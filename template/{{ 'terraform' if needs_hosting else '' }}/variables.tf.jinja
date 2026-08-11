@@ -4,3 +4,18 @@ variable "aws_region" {
   type    = string
   default = "{{ aws_region }}"
 }
+
+# No default, deliberately — the whole point is that every apply says which
+# environment it's targeting rather than falling into one by omission.
+# Composed into every resource name and SSM path (see locals in main.tf), not
+# passed into terraform-modules: the modules take app_name/table_name as
+# plain strings, so naming is this root config's job, not a module's.
+variable "environment" {
+  type        = string
+  description = "Deployment environment. Composed into every resource name and SSM path so staging and production never collide."
+
+  validation {
+    condition     = contains(["staging", "production"], var.environment)
+    error_message = "environment must be one of: staging, production."
+  }
+}

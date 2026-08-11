@@ -19,9 +19,10 @@ Format per entry:
 **Decision:** preset `{{ flavor }}` — capabilities {% if needs_api %}API{% endif %}{% if needs_ui %}{% if needs_api %} + {% endif %}UI{% endif %}{% if needs_hosting %} + HOSTED{% endif %}{% if needs_datastore %} + DATABASE{% endif %}{% if not needs_hosting %} (local-only){% endif %}.
 **Why:** {{ description }}
 {% if needs_hosting %}
-**Consequence:** this project owns an S3 bucket, `{{ state_bucket_name }}` in
-`{{ aws_region }}`, holding its Terraform state — created once by
-`terraform/bootstrap/` and deliberately outliving `terraform destroy`. Inside
-Always Free (SSE-S3, versioned, 90-day noncurrent expiry), so no
-`cost_acknowledged` was needed. See `terraform/README.md`.
+**Consequence:** this project's Terraform state lives in the S3 bucket shared
+across every project generated from this template, keyed
+`{{ project_slug }}/<environment>/terraform.tfstate` — not a bucket this
+project owns or manages. Isolation from other projects in the bucket is this
+project's deploy role, scoped to its own `{{ project_slug }}/*` prefix. See
+`terraform/README.md`.
 {% endif %}
