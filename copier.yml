@@ -12,7 +12,18 @@ _envops:
 # and (unlike the `rm -rf` tasks this replaced) it applies to `copier update`
 # too, not only to the first `copier copy`. See docs/decisions.md.
 _tasks:
-  - command: "git init"
+  # `-b main` is not cosmetic. Two things downstream are pinned to that exact
+  # name and fail silently without it:
+  #   - ci.yml declares `push: branches: [main]`, which simply never fires on a
+  #     repository whose default branch is `master`;
+  #   - the per-project production deploy role's OIDC trust policy pins
+  #     `repo:<org>/<repo>:ref:refs/heads/main`, so a `master` repository cannot
+  #     assume it at all — production is not "broken" for that project, it is
+  #     unreachable, and the error arrives as an AssumeRole denial well after
+  #     the scaffold.
+  # Git's own default is still `master` on a runner with no `init.defaultBranch`
+  # set, which is exactly where this runs.
+  - command: "git init -b main"
     when: "{{ _copier_operation == 'copy' }}"
   # Installs before the first commit so the lock files are *in* it. Both npm
   # CI jobs run `npm ci`, which fails outright without a lock file, and a
@@ -34,8 +45,28 @@ _tasks:
   - command: >-
       git commit --quiet -m "Scaffold from project-template (preset: {{ flavor }})"
     when: "{{ _copier_operation == 'copy' }}"
+  # Creating the repository and pushing to it are deliberately two steps, and
+  # `--push` is deliberately absent. GitHub does not index a repository's
+  # workflow files from the push that *creates* the repository, so a project
+  # scaffolded with `gh repo create --push` comes out with none of its workflows
+  # registered with Actions. `ci.yml` recovers on its own — it runs on the first
+  # pull request, and running is what registers it — but `deploy.yml` is
+  # `workflow_dispatch`-only, so nothing ever triggers it, and it stays invisible:
+  # absent from `GET /actions/workflows`, and a 404 from
+  # `GET /actions/workflows/deploy.yml`.
+  #
+  # The consequence is not subtle. Phase C asks whether the project has a deploy
+  # workflow, is told no, and reports a hosted project as "not hosted, nothing to
+  # deploy" — and `gh workflow run` would 404 as well, so even ignoring the check
+  # there is nothing to dispatch. Every newly scaffolded hosted project stopped at
+  # `PR Ready`.
+  #
+  # Pushing separately, to a repository that already exists, indexes every
+  # workflow immediately. Keep these two commands apart.
   - command: >-
-      gh repo create {{ (github_owner + '/') if github_owner else '' }}{{ project_slug }} --private --source=. --remote=origin --push
+      gh repo create {{ (github_owner + '/') if github_owner else '' }}{{ project_slug }} --private --source=. --remote=origin
+    when: "{{ _copier_operation == 'copy' }}"
+  - command: "git push -u origin main"
     when: "{{ _copier_operation == 'copy' }}"
 
 project_name:
