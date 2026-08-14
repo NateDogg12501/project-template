@@ -66,6 +66,18 @@ module "table" {
   attributes = [
     { name = "id", type = "S" },
   ]
+
+  # The module defaults to 5/5, which is wrong for this pipeline rather than
+  # wrong in general. DynamoDB's always-free allowance is 25 read and 25 write
+  # units for the whole account and region, and the capacity gate refuses to
+  # deploy past 20 of them. At 5/5 a project costs 10 units across its two
+  # environments, so the third hosted project with a datastore takes the
+  # account over the gate — and because the gate sums tables that already
+  # exist, it is not that project's deploy that fails, it is every deploy
+  # after it, in every project. 1/1 is enough for anything this template is
+  # for; a project that outgrows it should say so here, deliberately.
+  read_capacity  = 1
+  write_capacity = 1
 }
 
 resource "aws_iam_role_policy" "app_table_access" {
