@@ -110,6 +110,30 @@ as the worked example.
   and correspondingly no deploy credentials at all — see
   [`docs/cd-pipeline.md`](docs/cd-pipeline.md) B3.
 
+### Authentication: one credential, account-wide
+
+- **A hosted project authenticates against `/shared/auth_username` and
+  `/shared/auth_password_hash`, and creates no credential of its own.** They are
+  account-wide SSM parameters, written once by the account bootstrap and
+  consumed by every project. `aws-account`'s `docs/decisions.md` #7 records the
+  trade-off that makes them acceptable — one compromise reaches every project,
+  and no project can be revoked individually — and that trade was accepted on
+  the understanding that there is exactly **one** credential to reason about.
+- **A project that generates its own password silently voids that reasoning.**
+  It adds a secret nobody rotates, a login that behaves unlike every other
+  project's, and a second place to look when someone cannot get in. The failure
+  is invisible from inside the project: it works, its tests pass, its deploy is
+  green, and the divergence shows up only by listing the account's SSM
+  parameters side by side — or by a human trying the shared password and being
+  refused.
+- The password lives as a **bcrypt hash**, never plaintext, and the username is
+  a real field. **A project presenting a password-only form is not using this
+  credential**, whatever it calls the parameter it reads.
+- `terraform/main.tf` wires both into the Lambda as `AUTH_USERNAME` and
+  `AUTH_PASSWORD_HASH`. The *only* secret a generated project owns is
+  `/<project_slug>/<environment>/session_secret`, and it signs sessions rather
+  than granting access — it is not an alternative to the above.
+
 ### Deploying is composed stages, and the workflow holds none of the logic
 
 A hosted project deploys through `.github/workflows/deploy.yml`, which is
