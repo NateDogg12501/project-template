@@ -157,20 +157,40 @@ jobs:
         run: |
           npm ci
           npm run build:lambda
-      - name: Plan every environment
+      - name: Plan the staging environment
         if: github.event_name == 'pull_request' && steps.role-check.outputs.configured == 'true'
-        # `staging production` here mirrors variable "environment"'s
-        # validation in variables.tf — a third environment is a list entry in
-        # both places, not a redesign. `-reconfigure` is required to switch
-        # backend key mid-loop; plain `init` reuses whatever's already on disk.
+        # Staging only, and that is a limit rather than a preference.
+        #
+        # This step used to loop `staging production`. It could not have worked:
+        # a pull request can only assume the *staging* role — production's OIDC
+        # trust policy pins `ref:refs/heads/main`, which no PR branch satisfies —
+        # and the staging role's S3 access is scoped to
+        # `<bucket>/{{ project_slug }}/staging/*`. Planning production means
+        # acquiring a lock at `{{ project_slug }}/production/terraform.tfstate.tflock`,
+        # which that role is denied, so the loop failed on its second iteration
+        # with `AccessDenied` on `PutObject`.
+        #
+        # It looked green for a while because of the guard above: before a
+        # project has been through AWS provisioning there is no
+        # `AWS_ROLE_STAGING`, the whole step is skipped, and the job passes
+        # without planning anything. So this failed the moment provisioning
+        # completed, and every pull request after it — the job went from
+        # checking nothing to failing always, with nothing in between.
+        #
+        # What is lost is small: `terraform validate` above already runs
+        # backend-free and catches a config that cannot parse or resolve, and
+        # the two environments differ only by `var.environment`. What a
+        # production plan would add over a staging one is a check that
+        # production's *state* still matches the config, and a pull request has
+        # no credential that can read it. That belongs to the deploy, which
+        # holds the production role and plans it there.
+        #
+        # `-reconfigure` stays: it is what lets the backend key be set here at
+        # all rather than reusing whatever is on disk.
         run: |
           set -euo pipefail
-          for env in staging production; do
-            echo "::group::plan ($env)"
-            terraform init -input=false -reconfigure -backend-config="key={{ project_slug }}/$env/terraform.tfstate"
-            terraform plan -input=false -var="environment=$env"
-            echo "::endgroup::"
-          done
+          terraform init -input=false -reconfigure -backend-config="key={{ project_slug }}/staging/terraform.tfstate"
+          terraform plan -input=false -var="environment=staging"
 
   # HOSTED's second job, for the fourth thing a capability owns: its pipeline
   # stages. The stages themselves run in deploy.yml against real AWS; this is
