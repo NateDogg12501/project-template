@@ -47,7 +47,11 @@ runs:
         for attempt in $(seq 1 "$ATTEMPTS"); do
           # --fail is deliberately absent: a 5xx is information here, not an
           # error to hide, and the status code is what the message needs.
-          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$target" || echo 000)
+          # curl already writes '000' via -w on a connection failure, so a
+          # trailing `|| echo 000` would append a second one — fall back only
+          # when curl produced no output at all.
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$target")
+          [ -n "$code" ] || code=000
           echo "attempt $attempt/$ATTEMPTS: $target -> $code"
           if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then
             echo "::notice::$target answered $code"
