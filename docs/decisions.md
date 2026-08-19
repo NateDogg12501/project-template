@@ -1172,3 +1172,89 @@ revisiting — the assumption that a squash-merge's tree always matches what
 same repo at once. Until then, `main` on a generated project carries no CI run
 of its own; the last signal on its tip is whatever `pull_request` said about
 the PR that produced it.
+
+## 2026-08-18: Template fixes propagate via a `copier update` script that opens a PR
+**Context:** P12 fixed a bug in `ci.yml.jinja` that broke CI on every hosted
+project from the moment it finished AWS provisioning. The fix merged here and
+reached nothing — `restock-list` kept the broken file, its CI stayed red, the
+merge gate correctly refused, and production was unreachable until someone
+patched it by hand. Nothing in the pipeline could even say *which* projects
+were affected. The machinery to fix this already existed and was unused:
+every generated project commits `.copier-answers.yml`, and `copier update`
+exists precisely for this.
+**Decision:** two scripts, in this order.
+`scripts/template-doctor.js` reports which projects are behind and how many
+of the commits they are missing touch files they do not own; it only reads.
+`scripts/template-update.js` runs `copier update` against one project and
+opens a pull request, resolving conflicts according to the ownership split
+in STANDARDS.md. Neither pushes to `main`; nothing is auto-merged.
+**Why not a Bug ticket per project:** it uses the pipeline as designed and
+gets a real review, but it costs a full build cycle per project per fix, and
+the cost is paid per *fix* rather than per project — a template repo that
+merges ten fixes a month against four projects is forty tickets. It also
+doesn't scale down: propagating a two-line smoke-test fix through a
+plan-approve-build-review cycle is more ceremony than the change is worth.
+Worth keeping for the case where a template change genuinely needs
+project-specific work to land, which `copier update` cannot do by definition.
+**Why not report-only as the endpoint:** report-only was built first and is a
+prerequisite either way — you cannot sensibly update what you cannot
+enumerate — and it alone would have caught P12. But it leaves the actual fix
+to a hand edit, which is what P12 already demonstrated the failure of: the
+hand-patch in `restock-list` was correct and still left three later fixes
+unpropagated. Knowing is necessary and not sufficient.
+**Consequence:** the template's `template/` tree is now a live API with four
+consumers that get patched from it, so a change there is a change to every
+generated project, whether or not anyone runs the update that day.
+`template-doctor.js` exits non-zero when anything is behind, so it can become
+a scheduled check. Wiring it to one is deliberately *not* done here: it needs
+a token with push rights across the projects org, and an unattended job that
+opens PRs against live repositories should be turned on knowingly rather than
+as a side effect of this phase.
+
+## 2026-08-18: Generated-project paths split three ways, not two
+**Context:** `copier update` re-applies template changes as a diff, so it will
+conflict with anything a builder has edited since generation. "Template owns
+the pipeline, project owns the app" is the obvious split and it is not
+sufficient.
+**Decision:** three buckets — template-owned (overwrite), project-owned (never
+touch), shared (surface markers, never resolve automatically) — with
+`.copier-answers.yml` as Copier's own, hand-edited by nobody. Written up in
+STANDARDS.md's "Template ownership"; `scripts/ownership.js` is the executable
+copy.
+**Why not two buckets:** `terraform/main.tf` is the counterexample that forced
+the third. The template lays down the Lambda, the function URL and the table;
+the project then legitimately adds resources to that same file. Calling it
+template-owned would have silently reverted `restock-list`'s uncommented
+`SESSION_SECRET` — the parameter its login signs sessions with — and calling
+it project-owned would freeze every project's Terraform at whatever the
+template said on the day it was generated. Neither is acceptable, so shared
+paths are surfaced for a human and the mechanism refuses to pick a side.
+**Consequence:** `template-update.js` *errors out* rather than proceeding if
+the template wants to change a project-owned path, on the grounds that this
+is a template bug rather than something to resolve in a project's PR. Adding
+a file to `template/` now means deciding which bucket it is in; anything
+unclassified is reported rather than guessed at.
+
+## 2026-08-18: `copier update` runs with LF line endings, or not at all
+**Context:** run on Windows with Git's default `core.autocrlf=true`, the
+first update of `restock-list` produced a single conflict spanning all 495
+lines of `ci.yml`, plus about twenty files marked modified with no content
+change at all.
+**Decision:** the mechanism clones with `core.autocrlf=false`, and discards
+changes that are line-endings-only rather than committing them.
+**Why it happens:** with `autocrlf=true` the working tree is CRLF while the
+committed blobs are LF, so every line of every builder-touched file differs
+from Copier's freshly rendered LF output and the merge degenerates to
+whole-file. Separately, Copier's internal clone of the template inherits the
+same setting, so *static* (non-`.jinja`) files arrive CRLF while Jinja-rendered
+ones arrive LF — hence the phantom modifications. The same update with
+`autocrlf=false` produced one 40-line conflict hunk in the one step that had
+actually been hand-edited.
+**Why not a `.gitattributes` in the template instead:** it would fix new
+projects and do nothing for the four that already exist, which are the ones
+that need propagating. Worth adding later; it is not a substitute for the
+clone flag, since the flag is what makes the update correct on any machine
+regardless of what a project's repo says.
+**Consequence:** a propagation run is only reviewable on a Linux runner or a
+machine with `autocrlf` off. This is the strongest argument for the scheduled
+job eventually running in Actions rather than on someone's laptop.
