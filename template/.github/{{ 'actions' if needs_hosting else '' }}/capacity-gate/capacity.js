@@ -17,9 +17,33 @@ export const DEFAULT_THRESHOLD = 20
 // against.
 const MAX_PAGES = 1000
 
+// Absent and unreadable are different answers, and only one of them is zero.
+//
+// A missing ProvisionedThroughput is a real zero: that is what a GSI on an
+// on-demand table reports, and it genuinely holds no provisioned units. A
+// value that is *present* and does not parse is DynamoDB saying something this
+// gate does not understand, and counting it as zero under-reports the account
+// and lets the deploy through. That is the gate reporting "fine" because it
+// could not read — the one thing the comment on `main` below says it must
+// never do, and what STANDARDS.md's "A failed read is not an answer" is about.
+//
+// Numeric strings are accepted rather than refused: the CLI emits real JSON
+// numbers today, and failing every deploy over a representation change would
+// be the opposite failure mode. An empty string is not a number and is refused
+// with everything else.
 function units(value) {
-    const n = Number(value)
-    return Number.isFinite(n) ? n : 0
+    if (value === undefined || value === null) return 0
+
+    const raw = typeof value === 'string' ? value.trim() : value
+    const n = typeof raw === 'number' || (typeof raw === 'string' && raw !== '') ? Number(raw) : NaN
+    if (!Number.isFinite(n)) {
+        throw new Error(
+            `describe-table reported a capacity value this gate cannot read: ${JSON.stringify(value)}. `
+            + 'Refusing to count it as zero — that would under-report the account and pass a deploy '
+            + 'the gate has not actually checked.',
+        )
+    }
+    return n
 }
 
 // Paginated by hand rather than by letting the AWS CLI do it. The CLI does

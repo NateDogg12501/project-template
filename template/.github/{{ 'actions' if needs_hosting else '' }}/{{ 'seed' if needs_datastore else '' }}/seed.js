@@ -146,9 +146,26 @@ export async function batchWrite(runner, table, requests, { attempts = 5, sleep 
     }
 }
 
+// A DynamoDB table always has at least a partition key, so an empty key list
+// is not a table shape — it is a describe this code could not read. The old
+// `?? []` spelled the two the same way, and `clearTable` then built a scan
+// with an empty ProjectionExpression, which DynamoDB rejects. So it did fail,
+// two steps away from the cause and wearing a ValidationException that names
+// neither this function nor the table it could not describe. Failing here says
+// the true thing in the place that knows it.
 export function tableKeyNames(runner, table) {
     const described = runAwsJson(runner, ['dynamodb', 'describe-table', '--table-name', table, '--output', 'json'])
-    return (described.Table?.KeySchema ?? []).map((element) => element.AttributeName)
+    const schema = described.Table?.KeySchema
+
+    if (!Array.isArray(schema) || schema.length === 0) {
+        throw new Error(`describe-table returned no KeySchema for ${table}, so its key attributes are unknown`)
+    }
+
+    const names = schema.map((element) => element.AttributeName)
+    if (names.some((name) => typeof name !== 'string' || name === '')) {
+        throw new Error(`describe-table returned an unreadable KeySchema for ${table}: ${JSON.stringify(schema)}`)
+    }
+    return names
 }
 
 export function tableExists(runner, table) {
