@@ -305,6 +305,76 @@ environment is a list entry, not a redesign.
   path end to end, so a bug can't hide in a difference between them — a
   hand-rolled abstraction is exactly what would introduce one.
 
+## A failed read is not an answer
+
+**A read that failed and a read that found nothing are different answers, and
+any code path that acts on the difference must be able to tell them apart.**
+
+This is the most expensive class of bug this pipeline has shipped, and it never
+looks like a bug in review. It looks like a considerate default: a lookup
+returns `null`, the caller falls back to something sensible, and a comment
+explains why the fallback is the kind thing to do. It only comes apart when the
+lookup fails for a reason nobody anticipated — and by then the fallback has
+already done something.
+
+The worked example is `idea-workflow`'s `hasDeployWorkflow`. It answers "can
+this project deploy itself?" by *listing* a repository's workflows rather than
+fetching `deploy.yml` directly, because GitHub answers **404 for a resource a
+fine-grained token may not see**, exactly as it does for one that isn't there. A
+direct fetch cannot tell "this project is not hosted" from "the token is missing
+`Actions: read`", and getting that wrong reports a broken token as a finished
+build. A listing that fails is a permission problem and says so; a listing that
+succeeds without `deploy.yml` in it is a real absence.
+
+What the same shape cost before it was noticed: a pull request lookup returned
+`null` for both "no pull request" and "the token could not read one", the caller
+fell back to deploying `main`, and staging came up running the bare scaffold. It
+passed its own smoke test, because the scaffold serves `/api/health`. The ticket
+reached a human review gate inviting somebody to approve a URL that was not
+running the code under review.
+
+### Applying it
+
+Go looking for these, because none of them announce themselves:
+
+- `?? default` and `|| fallback` on anything derived from an I/O call
+- `catch {}` and `catch { return null }`, especially around `gh`, `aws`,
+  `fetch`, `terraform` and `JSON.parse`
+- `if (exitCode !== 0) return false` / `return null` / `return []` / `continue`
+- an empty array or an empty result set that a *failed* read produces, where an
+  empty one is also a legitimate answer
+
+For each, ask what happens if it fires for a reason nobody anticipated. The
+answer decides the fix:
+
+| The fallback causes | It should |
+|---|---|
+| a deploy, a merge, a status advance, a write | **fail** — refuse, and say what could not be read |
+| a cosmetic degradation (a link missing from a message) | degrade, **and say that it degraded** |
+
+Degrading is a real option and often the right one — failing closed everywhere
+turns every transient error into a stranded ticket, which is its own failure
+mode. What is never an option is degrading silently. `idea-workflow`'s merge
+gate is the pattern: when the token cannot read individual checks it gates on
+GitHub's aggregate instead, **records in the ticket that it did so**, and links
+the checks page so a person can see what the pipeline could not.
+
+Two supporting habits:
+
+- **Name the two answers in the type**, not in a comment. A function returning
+  `'read' | 'absent' | 'unreadable'` cannot have its third case quietly folded
+  into its second by the next caller; one returning `T | null` invites exactly
+  that. If a `null` already means both things, every caller is now part of the
+  contract — changing one of them is not a fix.
+- **Put the judgement in a pure function.** "Did this land?", "is this absent or
+  unreadable?" and "may this be merged?" are decidable from a few strings, and a
+  pure function is the only way to assert every combination of them rather than
+  meeting the interesting ones in production.
+
+Note that `## Testing`'s per-package `vitest.config.js` rule below is this same
+rule wearing different clothes: a test run that found no files exits 0, so
+"nothing failed" and "nothing was checked" arrive spelled identically.
+
 ## Documentation
 
 - `README.md`: what it is, how to run it locally, how (and whether) it's

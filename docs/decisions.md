@@ -1258,3 +1258,50 @@ regardless of what a project's repo says.
 **Consequence:** a propagation run is only reviewable on a Linux runner or a
 machine with `autocrlf` off. This is the strongest argument for the scheduled
 job eventually running in Actions rather than on someone's laptop.
+
+## 2026-08-18: "A failed read is not an answer" promoted into STANDARDS.md
+
+**What was chosen:** a normative section saying that a read which *failed* and a
+read which *found nothing* are different answers, and that any code path acting
+on the difference must be able to tell them apart — with a table splitting the
+response by what the fallback causes (a deploy, a merge, a status advance or a
+write must fail; a cosmetic degradation may degrade, provided it says so).
+
+**Why it is a standard rather than one repo's bug fix:** `idea-workflow` shipped
+this defect three times in one file and once more two files away, and every
+instance passed review, because none of them looks like a bug. Each is a
+considerate default with a comment explaining why the fallback is the kind thing
+to do — `?? DEFAULT_BASE_BRANCH` "because deploying *something* and saying which
+is more useful than refusing". The one that cost the most deployed a bare
+scaffold to staging and invited a human to approve it; the scaffold serves
+`/api/health`, so it passed its own smoke test. A rule that only lives in the
+repo that learned it is a rule the next repo learns the same way.
+
+**Why `hasDeployWorkflow` is the worked example rather than the failure:** the
+same codebase already argued the rule correctly, at length, in a function that
+lists a repository's workflows instead of fetching one — precisely because a
+fine-grained token answers 404 for a resource it may not see, exactly as it does
+for one that is not there. Citing the version that got it right gives a reader a
+shape to copy, not just an outcome to avoid. The failure is in this repo's own
+`.github/actions/capacity-gate`, which states the same rule in a comment ("the
+one thing this must never do is report 'fine' because it could not look") — two
+independent arrivals at the same principle is the evidence that it generalises.
+
+**Why not a lint rule:** the tempting mechanisation is banning `?? ` after an
+await, or `catch {}`. Both fire constantly on code that is correct — most
+fallbacks are cosmetic and should stay — and neither can see the thing that
+decides the verdict, which is what the value goes on to *cause*. The section
+therefore asks for a judgement and gives the table to make it with, plus two
+habits that make the judgement checkable: name the two answers in the type
+rather than in a comment, and put the decision in a pure function.
+
+**What it costs:** a `T | null` that already means both things cannot be fixed in
+one place — every caller is part of the contract. `idea-workflow` hit exactly
+that: a first fix covered one of two callers and the second kept reporting a
+landed, irreversible squash-merge as a failure. Widening a return type is
+therefore a breaking change to be done deliberately, which is the argument for
+the type-level habit over the comment.
+
+**Where the evidence lives:** `idea-workflow`'s `docs/decisions.md`, entry
+"a failed read and an empty read stop being spelled the same way" — the full
+audit table, the four fixes, and the ones deliberately left alone.
