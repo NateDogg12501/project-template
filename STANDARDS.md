@@ -481,3 +481,95 @@ recorded in `.copier-answers.yml`, `README.md` and `CLAUDE.md` as provenance
 Adding a preset is a defaults-only change to `copier.yml` plus a line here
 and an entry in `docs/decisions.md`. If a proposed preset needs files of its
 own, it isn't a preset — it's a capability, and belongs in the table above.
+
+## Template ownership
+
+A fix to this template reaches a generated project only if something carries
+it there. For a long time nothing did. P12 fixed a bug in `ci.yml.jinja` that
+broke CI on every hosted project from the moment it finished AWS provisioning;
+the fix merged here and reached nothing, and `restock-list` had to be patched
+by hand. The propagation mechanism is `copier update`, and this section is the
+contract it operates under.
+
+### Know first: `scripts/template-doctor.js`
+
+```
+node scripts/template-doctor.js [--org <org>] [--verbose] [--json]
+```
+
+Reports, for every repo in the projects org that carries a
+`.copier-answers.yml`, which template ref it was generated from and how far
+behind it is — and, more usefully, **how many of the commits it is missing
+touch files it does not own**. A project forty commits behind on nothing but
+this repo's own `STANDARDS.md` needs no action; a project two commits behind
+on `.github/workflows/` is the P12 case. It exits non-zero when anything is
+behind, so it can be a check that fails rather than a report nobody reads.
+
+It only reads. Run it against live projects freely.
+
+### The three buckets
+
+`copier update` re-applies template changes as a diff, so whether it is safe
+depends entirely on whether a human has since edited the file it is patching.
+Every path in a generated project is therefore owned by exactly one side. The
+executable copy of this table is `scripts/ownership.js`; the two are meant to
+be read together, and neither is allowed to drift from the other.
+
+| Bucket | Paths | On conflict |
+|---|---|---|
+| **template-owned** | `.github/workflows/`, `.github/actions/`, `.github/PULL_REQUEST_TEMPLATE.md`, `.github/claude-review.yml.example`, `docs/deploy.md` | Template wins. Overwrite. |
+| **project-owned** | `backend/`, `frontend/`, `CLAUDE.md`, `README.md`, `docs/decisions.md` | Never touched. A conflict here is a bug in the template. |
+| **shared** | `terraform/`, `docker-compose.yml`, `.env.example`, `.gitignore`, `scripts/` | Neither side wins. Markers are left in the PR for a human. |
+| **copier's own** | `.copier-answers.yml` | Rewritten by `copier update` itself. Never hand-edit it — it is the record of what the project *was generated as*, and editing it makes that record a lie. |
+
+**Template-owned is pipeline infrastructure**, not application code. The
+builder is not expected to edit it, and a project carrying a stale copy is
+exactly the P12 failure. Overwriting is the point.
+
+**Project-owned is the application.** The template seeded it once and has no
+further claim. If an update ever wants to change a file here, the template is
+reaching somewhere it should not.
+
+**Shared is the bucket that had to exist.** `terraform/main.tf` forced it: the
+template lays down the Lambda, the function URL and the table, and then the
+project legitimately adds resources to that same file. `restock-list` had
+uncommented `SESSION_SECRET` there — overwriting would have silently
+un-configured the secret its login signs sessions with. Neither "overwrite"
+nor "never touch" is correct, so these are always surfaced for review and
+never resolved automatically.
+
+Two consequences follow, and both are load-bearing:
+
+- **A propagation change is always a pull request, never a push to `main`.**
+  `main` is what production deploys. Overwriting a template-owned file is
+  safe *as a proposal a human reads*, not as an unattended write — a builder
+  may have had a project-specific reason for their edit, and the diff is the
+  only place that gets noticed.
+- **Propagation PRs are not auto-merged.** The whole value is the human
+  looking at the diff.
+
+### Conflicts are normal, and the interesting ones are informative
+
+When `restock-list` was updated from `df803a8` to `bb6b730`, exactly one file
+conflicted: `.github/workflows/ci.yml`. Its plan step had been hand-patched in
+the project with the same fix that later landed here as `48d53e0` — the same
+change, arrived at independently, twice. That is what a healthy conflict looks
+like, and it is an argument for propagating sooner rather than later: the
+hand-patch existed only because nothing carried the fix.
+
+### `copier update` must run with LF line endings
+
+Non-negotiable on Windows, and the reason the mechanism is specified to run on
+a Linux runner. With Git's `core.autocrlf=true` (the default from the Git for
+Windows installer) the working tree is CRLF while the committed blobs are LF,
+so every line of every builder-touched file differs from Copier's freshly
+rendered LF output. The result is not a subtle mismerge — it is a **whole-file
+conflict**. Updating `restock-list` that way produced a single conflict hunk
+spanning all 495 lines of `ci.yml`; the same update with `core.autocrlf=false`
+produced one 40-line hunk in the one step that had actually been edited.
+
+A second, quieter effect: Copier's internal clone of this template also
+inherits the machine's `autocrlf`, so *static* (non-`.jinja`) files arrive
+CRLF while Jinja-rendered ones arrive LF. That marks ~20 untouched files as
+modified with zero content change, which is enough to make a propagation diff
+unreadable. Changes that are line-endings-only are discarded, never committed.
