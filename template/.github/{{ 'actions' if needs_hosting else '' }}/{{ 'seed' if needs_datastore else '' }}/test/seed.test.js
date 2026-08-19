@@ -15,6 +15,7 @@ import {
     main,
     sanitizeAll,
     scanPages,
+    tableKeyNames,
 } from '../seed.js'
 
 const SOURCE = 'demo-production-items'
@@ -317,5 +318,45 @@ describe('main', () => {
 
         expect(await main({ runner: fakeRunner(() => ({})), env: envFor({ SOURCE_TABLE: TARGET }), out })).toBe(1)
         expect(out.text()).toContain('onto itself')
+    })
+})
+
+// A DynamoDB table always has at least a partition key, so "no keys" is not a
+// table shape — it is a describe this code could not read. The old `?? []`
+// spelled the two the same way and handed an empty key list to `clearTable`,
+// which built a scan with an empty ProjectionExpression; DynamoDB rejects
+// that, so it did fail — two steps away, wearing a ValidationException that
+// names neither this function nor the table it could not describe.
+describe('tableKeyNames', () => {
+    it('returns the key attribute names', () => {
+        const runner = fakeRunner(() => ({
+            Table: { KeySchema: [{ AttributeName: 'pk' }, { AttributeName: 'sk' }] },
+        }))
+
+        expect(tableKeyNames(runner, TARGET)).toEqual(['pk', 'sk'])
+    })
+
+    it.each([
+        ['no KeySchema at all', { Table: {} }],
+        ['an empty KeySchema', { Table: { KeySchema: [] } }],
+        ['a KeySchema that is not an array', { Table: { KeySchema: {} } }],
+    ])('refuses %s rather than reporting a table with no keys', (_what, response) => {
+        const runner = fakeRunner(() => response)
+
+        expect(() => tableKeyNames(runner, TARGET)).toThrow(/KeySchema/)
+    })
+
+    it('refuses a KeySchema whose entries have no attribute name', () => {
+        const runner = fakeRunner(() => ({ Table: { KeySchema: [{ KeyType: 'HASH' }] } }))
+
+        expect(() => tableKeyNames(runner, TARGET)).toThrow(/unreadable/i)
+    })
+
+    // The message has to name the table: this runs against the *target*, and
+    // "which table could not be described" is the whole of the diagnosis.
+    it('names the table it could not describe', () => {
+        const runner = fakeRunner(() => ({ Table: {} }))
+
+        expect(() => tableKeyNames(runner, TARGET)).toThrow(new RegExp(TARGET))
     })
 })

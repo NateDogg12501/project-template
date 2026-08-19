@@ -85,6 +85,62 @@ describe('tableCapacity', () => {
         expect(capacity).toMatchObject({ read: 7, write: 3, billingMode: 'PROVISIONED' })
     })
 
+    // A GSI on an on-demand table omits ProvisionedThroughput altogether, so
+    // absent has to keep meaning zero — this is the case the strictness below
+    // must not break.
+    it('counts a missing ProvisionedThroughput as a real zero', () => {
+        const capacity = tableCapacity({
+            Table: {
+                TableName: 'items',
+                GlobalSecondaryIndexes: [{ IndexName: 'by-date' }],
+            },
+        })
+
+        expect(capacity).toMatchObject({ read: 0, write: 0 })
+    })
+
+    // The other half, and the reason this gate exists: a value that is present
+    // and unreadable used to be counted as zero, so a describe this code could
+    // not parse under-reported the account and let the deploy through. The
+    // gate would have reported "fine" because it could not look.
+    describe.each([
+        ['a string that is not a number', 'unlimited'],
+        ['an empty string', ''],
+        ['an object', { N: '5' }],
+        ['an array', [5]],
+    ])('refuses %s', (_what, value) => {
+        it('rather than counting it as zero', () => {
+            expect(() =>
+                tableCapacity({
+                    Table: { TableName: 'items', ProvisionedThroughput: { ReadCapacityUnits: value, WriteCapacityUnits: 5 } },
+                }),
+            ).toThrow(/cannot read/i)
+        })
+    })
+
+    // Refusing every deploy over a representation change would be the opposite
+    // failure mode, and a numeric string is unambiguous.
+    it('accepts a numeric string', () => {
+        const capacity = tableCapacity({
+            Table: { TableName: 'items', ProvisionedThroughput: { ReadCapacityUnits: '7', WriteCapacityUnits: 3 } },
+        })
+
+        expect(capacity).toMatchObject({ read: 7, write: 3 })
+    })
+
+    // The refusal has to reach the exit code, not just the stack: the gate's
+    // whole job is to fail the deploy.
+    it('fails the gate rather than passing an unreadable account', () => {
+        const lines = []
+        const runner = fakeRunner([
+            { TableNames: ['items'] },
+            { Table: { TableName: 'items', ProvisionedThroughput: { ReadCapacityUnits: 'lots', WriteCapacityUnits: 0 } } },
+        ])
+
+        expect(main({ runner, argv: [], env: {}, out: (l) => lines.push(l) })).toBe(1)
+        expect(lines.join('\n')).toMatch(/could not determine account DynamoDB capacity/i)
+    })
+
     // LSIs share the table's throughput rather than holding their own, so
     // adding them would double-count.
     it('ignores local secondary indexes', () => {

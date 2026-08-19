@@ -1305,3 +1305,46 @@ the type-level habit over the comment.
 **Where the evidence lives:** `idea-workflow`'s `docs/decisions.md`, entry
 "a failed read and an empty read stop being spelled the same way" — the full
 audit table, the four fixes, and the ones deliberately left alone.
+
+## 2026-08-19: the two stage fallbacks the standard was written about
+
+**Context:** the audit that produced "A failed read is not an answer" found two
+places in this repo's own deploy stages with the shape it describes, and
+reported them without fixing them — on a stated belief that they lived on an
+unmerged branch. That belief came from a stale local `main` and was wrong; both
+were on `main` the whole time. This is the follow-up, and the wrong reason is
+recorded here because "we looked and decided not to" and "we looked at the
+wrong thing" are worth telling apart later.
+
+**`units()` in capacity-gate: now refuses a value it cannot read.** It mapped
+anything non-finite to `0`, which is right for a *missing* `ProvisionedThroughput`
+— that is what a GSI on an on-demand table reports, and it genuinely holds no
+units — and wrong for a value that is present and unparseable. The two shared a
+spelling, so a describe this gate could not read would under-report the account
+and let the deploy through: the gate reporting "fine" because it could not look,
+which the comment on its own `main` already said it must never do. Absent still
+returns zero; present-and-unreadable throws, and the throw reaches the exit code.
+
+**Why numeric strings are accepted rather than refused:** the CLI emits real
+JSON numbers today, and the strictest possible reading would fail every deploy
+in the account the day that changed. Refusing an empty string and every non-
+number is enough to close the gap; refusing `"5"` would be the stranded-ticket
+failure mode the standard explicitly warns about. This is the "degrade" side of
+the same judgement — be strict about what silently under-reports, lenient about
+what is merely a different representation of the same number.
+
+**`tableKeyNames()` in seed: the fix is diagnosis, not safety.** Worth being
+honest that this one was misclassified when first reported. `?? []` fed an empty
+key list to `clearTable`, which built a scan with an empty `ProjectionExpression`
+— which DynamoDB rejects. So it did fail, and no bad seed could result. What it
+did not do is fail *where the cause was*: the error arrived two steps away as a
+`ValidationException` naming neither the function nor the table it could not
+describe. A DynamoDB table always has at least a partition key, so an empty key
+list is never a table shape, and saying so here costs one branch.
+
+**Why both got a test that fails against the old code:** each was verified by
+reverting the implementation in a scratch copy and confirming the ten new cases
+go red, because a test written after a fix is a test that can pass for the wrong
+reason. The suite for these stages does not run from the template — `package.json`
+here is a `.jinja` — so it was exercised against a rendered copy, the same way
+CI's `pipeline-stages` job does.
