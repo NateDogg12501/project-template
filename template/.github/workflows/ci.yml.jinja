@@ -1,16 +1,38 @@
 name: CI
 
+# Pull-request only. Phase D of the pipeline squash-merges a PR whose CI just
+# passed, straight from a green staging review — re-testing `main` afterward
+# would mean testing content that was already tested minutes earlier. See
+# docs/decisions.md ("push:main dropped from generated ci.yml") for the
+# trade-off and why it's acceptable in this pipeline's serial, single-ticket
+# flow.
 on:
   pull_request:
-  push:
-    branches: [main]
 
 jobs:
-  claude-md:
+  # Every capability's checks live here as steps, not as separate jobs.
+  # GitHub bills per job, rounded up to the minute — six jobs each finishing
+  # in 10-30 seconds were costing six billed minutes for well under a minute
+  # of real work. One job costs one or two. Every step past the checkout
+  # carries `if: ${{ '{{' }} !cancelled() }}` so a failure in one capability's
+  # check doesn't hide whether another capability is also broken — the same
+  # "see everything red at once" visibility the separate jobs gave for free.
+  # See STANDARDS.md's "Capabilities" and docs/decisions.md.
+  checks:
     runs-on: ubuntu-latest
+    # `id-token` is for terraform's per-environment plan below, which assumes
+    # an AWS role via OIDC. Granting it at job level costs nothing for the
+    # steps that don't use it — every step in this job comes from this file,
+    # not from untrusted PR content. `contents: read` (checkout) needs
+    # restating once `permissions` is set, since unlisted scopes default to
+    # none.
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
-      - name: Check CLAUDE.md placeholders are filled in
+
+      - name: "claude-md: check CLAUDE.md placeholders are filled in"
         run: |
           if grep -nE '\[(fill in|Expand:|Things|What|Bugs|Scope cuts|The 2-3)' CLAUDE.md; then
             echo "CLAUDE.md still has unfilled template placeholders (see matches above) — fill them in before merging." >&2
@@ -18,74 +40,70 @@ jobs:
           fi
 {% if needs_api %}
 
-  backend:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: "backend: install"
+        if: ${{ '{{' }} !cancelled() }}
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: backend/package-lock.json
-      - run: npm ci
-      # Plain `npm test`, not `--if-present`: the API capability ships tests,
-      # so a package with no test script is a defect this job should catch,
-      # not something it should skip past.
-      - run: npm test
+      - name: "backend: npm ci"
+        if: ${{ '{{' }} !cancelled() }}
+        working-directory: backend
+        run: npm ci
+      - name: "backend: npm test"
+        if: ${{ '{{' }} !cancelled() }}
+        working-directory: backend
+        # Plain `npm test`, not `--if-present`: the API capability ships tests,
+        # so a package with no test script is a defect this step should catch,
+        # not something it should skip past.
+        run: npm test
 {% endif %}
 {% if needs_ui %}
 
-  frontend:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: "frontend: install"
+        if: ${{ '{{' }} !cancelled() }}
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - run: npm ci
-      - run: npm test
+      - name: "frontend: npm ci"
+        if: ${{ '{{' }} !cancelled() }}
+        working-directory: frontend
+        run: npm ci
+      - name: "frontend: npm test"
+        if: ${{ '{{' }} !cancelled() }}
+        working-directory: frontend
+        run: npm test
 {% endif %}
 {% if needs_hosting %}
 
-  # HOSTED owns this job.{% if needs_datastore %} It also validates whatever DATABASE puts inside
-  # terraform/ (the table module + its IAM policy) — same as this job
-  # validating HOSTED's own blocks, since it checks the whole directory, not
-  # one capability's share of it. DATABASE's own CI job is `datastore`,
-  # below, which is where its local/runnable code (not its Terraform) is
-  # tested; see STANDARDS.md's "The contract: a capability owns its files,
-  # its tests, and its CI job".{% endif +%}
-  terraform:
-    runs-on: ubuntu-latest
-    # `id-token` is for the per-environment plan below, which assumes an AWS
-    # role via OIDC — see the step comment for why the staging role covers
-    # every environment's plan. Once `permissions` is set, unlisted scopes
-    # default to none, so `contents: read` (checkout) needs restating.
-    permissions:
-      id-token: write
-      contents: read
-    defaults:
-      run:
+      # HOSTED owns these steps.{% if needs_datastore %} They also validate whatever DATABASE puts
+      # inside terraform/ (the table module + its IAM policy) — same as these
+      # steps validating HOSTED's own blocks, since they check the whole
+      # directory, not one capability's share of it. DATABASE's own checks are
+      # the `datastore:`-prefixed steps below, which is where its
+      # local/runnable code (not its Terraform) is tested; see STANDARDS.md's
+      # "The contract: a capability owns its files, its tests, and its CI
+      # checks".{% endif +%}
+      - name: "terraform: install"
+        if: ${{ '{{' }} !cancelled() }}
+        uses: hashicorp/setup-terraform@v3
+      - name: "terraform: fmt -check"
+        if: ${{ '{{' }} !cancelled() }}
         working-directory: terraform
-    steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
-      - run: terraform fmt -check
-      - name: Terraform derives from terraform-modules
+        run: terraform fmt -check
+      - name: "terraform: derives from terraform-modules"
+        if: ${{ '{{' }} !cancelled() }}
+        working-directory: terraform
         # Every module source must be a tag-pinned reference to the shared
         # module repo: a root config wires pinned modules together, it does not
         # declare AWS resources of its own. See STANDARDS.md's "Hosting".
         #
-        # Runs before `init` and excludes `.terraform/` — the modules Terraform
-        # fetches have `source = "hashicorp/aws"` lines of their own, and
-        # grepping upstream code is not the job.
+        # Excludes `.terraform/` — the modules Terraform fetches have
+        # `source = "hashicorp/aws"` lines of their own, and grepping upstream
+        # code is not the job.
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
@@ -113,8 +131,14 @@ jobs:
             echo "::error::every module source must be git::https://github.com/NateDogg12501/terraform-modules.git//modules/<name>?ref=vX.Y.Z — see STANDARDS.md, \"Hosting\""
             exit 1
           fi
-      - run: terraform init -backend=false
-      - run: terraform validate
+      - name: "terraform: init"
+        if: ${{ '{{' }} !cancelled() }}
+        working-directory: terraform
+        run: terraform init -backend=false
+      - name: "terraform: validate"
+        if: ${{ '{{' }} !cancelled() }}
+        working-directory: terraform
+        run: terraform validate
       # Plans against every declared environment on pull requests, so a
       # broken config is caught at PR time rather than at deploy time. Every
       # environment's plan assumes the *staging* role, not each its own:
@@ -127,9 +151,10 @@ jobs:
       # through per-project AWS provisioning. Every project generated before
       # that step ran has no role — skip with a notice instead of failing
       # red, and drop this guard once provisioning is universal.
-      - name: Check AWS_ROLE_STAGING is configured
-        if: github.event_name == 'pull_request'
+      - name: "terraform: check AWS_ROLE_STAGING is configured"
+        if: ${{ '{{' }} !cancelled() && github.event_name == 'pull_request' }}
         id: role-check
+        working-directory: terraform
         run: |
           if [ -z "${{ '{{' }} vars.AWS_ROLE_STAGING }}" ]; then
             echo "::notice::AWS_ROLE_STAGING repo variable is not set — this project hasn't been through per-project AWS provisioning yet. Skipping the per-environment plan."
@@ -137,28 +162,31 @@ jobs:
           else
             echo "configured=true" >> "$GITHUB_OUTPUT"
           fi
-      - uses: aws-actions/configure-aws-credentials@v4
-        if: github.event_name == 'pull_request' && steps.role-check.outputs.configured == 'true'
+      - name: "terraform: assume the staging role"
+        if: ${{ '{{' }} !cancelled() && github.event_name == 'pull_request' && steps.role-check.outputs.configured == 'true' }}
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ '{{' }} vars.AWS_ROLE_STAGING }}
           aws-region: {{ aws_region }}
       # `module.app`'s source_dir must exist before `terraform plan` — its
       # `lifecycle.precondition` (terraform-modules' lambda-web-app module)
       # fails the plan, not just the apply, on an empty or missing dist-lambda/.
-      - uses: actions/setup-node@v4
-        if: github.event_name == 'pull_request' && steps.role-check.outputs.configured == 'true'
+      - name: "terraform: install node for the Lambda build"
+        if: ${{ '{{' }} !cancelled() && github.event_name == 'pull_request' && steps.role-check.outputs.configured == 'true' }}
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: backend/package-lock.json
-      - name: Build the Lambda artifact
-        if: github.event_name == 'pull_request' && steps.role-check.outputs.configured == 'true'
+      - name: "terraform: build the Lambda artifact"
+        if: ${{ '{{' }} !cancelled() && github.event_name == 'pull_request' && steps.role-check.outputs.configured == 'true' }}
         working-directory: backend
         run: |
           npm ci
           npm run build:lambda
-      - name: Plan the staging environment
-        if: github.event_name == 'pull_request' && steps.role-check.outputs.configured == 'true'
+      - name: "terraform: plan the staging environment"
+        if: ${{ '{{' }} !cancelled() && github.event_name == 'pull_request' && steps.role-check.outputs.configured == 'true' }}
+        working-directory: terraform
         # Staging only, and that is a limit rather than a preference.
         #
         # This step used to loop `staging production`. It could not have worked:
@@ -192,60 +220,65 @@ jobs:
           terraform init -input=false -reconfigure -backend-config="key={{ project_slug }}/staging/terraform.tfstate"
           terraform plan -input=false -var="environment=staging"
 
-  # HOSTED's second job, for the fourth thing a capability owns: its pipeline
-  # stages. The stages themselves run in deploy.yml against real AWS; this is
-  # what exercises their logic — pagination, retries, thresholds and refusals —
-  # against recorded calls, on every pull request, for free.
+      # HOSTED's second reason for steps here, for the fourth thing a
+      # capability owns: its pipeline stages. The stages themselves run in
+      # deploy.yml against real AWS; this is what exercises their logic —
+      # pagination, retries, thresholds and refusals — against recorded calls,
+      # on every pull request, for free.
 {% if needs_datastore %}
-  # DATABASE's `seed` stage rides this job rather than having one of its own,
-  # the same carve-out that has it riding `terraform` above: it lives in the
-  # same package and is covered by the same command.
+      # DATABASE's `seed` stage rides these steps rather than having its own,
+      # the same carve-out that has it riding the `terraform:` steps above: it
+      # lives in the same package and is covered by the same command.
 {% endif %}
-  pipeline-stages:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: .github/actions
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: "pipeline-stages: install"
+        if: ${{ '{{' }} !cancelled() }}
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: .github/actions/package-lock.json
-      - run: npm ci
-      - run: npm test
+      - name: "pipeline-stages: npm ci"
+        if: ${{ '{{' }} !cancelled() }}
+        working-directory: .github/actions
+        run: npm ci
+      - name: "pipeline-stages: npm test"
+        if: ${{ '{{' }} !cancelled() }}
+        working-directory: .github/actions
+        run: npm test
 {% endif %}
 {% if needs_datastore %}
 
-  # DATABASE's own job. It used to ride the `terraform` job above because
-  # Terraform blocks were all it contributed; now it owns a client module, an
-  # init step and docker-compose wiring too, and this job is what actually
-  # exercises them — bringing dynamodb-local up for real and running the
-  # integration suite that plain `npm test` deliberately skips (see
-  # backend/vitest.config.js). See STANDARDS.md's "The contract: a capability
-  # owns its files, its tests, and its CI job".
-  datastore:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      # DATABASE's own checks. It used to ride the `terraform:` steps above
+      # because Terraform blocks were all it contributed; now it owns a client
+      # module, an init step and docker-compose wiring too, and these steps are
+      # what actually exercise them — bringing dynamodb-local up for real and
+      # running the integration suite that plain `npm test` deliberately skips
+      # (see backend/vitest.config.js). See STANDARDS.md's "The contract: a
+      # capability owns its files, its tests, and its CI checks".
+      - name: "datastore: install"
+        if: ${{ '{{' }} !cancelled() }}
+        uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: backend/package-lock.json
-      - run: npm ci
+      - name: "datastore: npm ci"
+        if: ${{ '{{' }} !cancelled() }}
         working-directory: backend
-      - name: Start dynamodb-local
+        run: npm ci
+      - name: "datastore: start dynamodb-local"
+        if: ${{ '{{' }} !cancelled() }}
         # `--wait` blocks until the healthcheck passes (or fails the step) —
         # the same signal that keeps the backend container from racing it in
         # docker-compose.yml.
         run: docker compose up -d --wait dynamodb-local
-      - run: npm run test:integration
+      - name: "datastore: npm run test:integration"
+        if: ${{ '{{' }} !cancelled() }}
         working-directory: backend
         env:
           AWS_ENDPOINT_URL_DYNAMODB: http://localhost:8000
-      - name: Stop the stack
+        run: npm run test:integration
+      - name: "datastore: stop the stack"
         if: always()
         run: docker compose down
 {% endif -%}

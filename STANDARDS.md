@@ -169,7 +169,8 @@ lines of shell belongs in a stage.
 
 ### Enforcement: pinned module sources
 
-The `terraform` CI job in every generated project fails when a `source =` in
+The `terraform: derives from terraform-modules` CI check in every generated
+project fails when a `source =` in
 any `*.tf` is not
 `git::https://github.com/NateDogg12501/terraform-modules.git//modules/<name>?ref=vX.Y.Z`.
 An unpinned `?ref=main`, a missing `?ref=`, a registry source and a local path
@@ -397,7 +398,7 @@ single boolean in `copier.yml`, independently on or off:
 | HOSTED | `needs_hosting` | Deployed to AWS Lambda on Always Free, via `terraform/`. | `capacity-gate`, `ensure-secrets`, `terraform-apply`, `smoke-test` |
 | DATABASE | `needs_datastore` | DynamoDB — the shared `dynamodb-single-table` Terraform module when deployed, `dynamodb-local` via docker compose when run locally, both behind the one client module in `backend/src/`. | `seed` |
 
-### The contract: a capability owns its files, its tests, its CI job, and its pipeline stages
+### The contract: a capability owns its files, its tests, its CI checks, and its pipeline stages
 
 All four travel together. A capability is not finished — is not *a
 capability* — until all four exist (a capability that deploys nothing has no
@@ -412,8 +413,18 @@ stages, which is a real answer, not a missing one). Concretely, to add one:
    `CLAUDE.md.jinja`, `ci.yml.jinja`) stay inline `{% if %}` blocks.
 2. **Tests.** Its own, testing its own files. Not folded into another
    capability's suite.
-3. **A CI job.** Its own job in `template/.github/workflows/ci.yml.jinja`,
-   gated on the same flag.
+3. **CI checks.** Its own steps in the one `checks` job in
+   `template/.github/workflows/ci.yml.jinja`, gated on the same flag and
+   clearly named (`"terraform: validate"`, `"datastore: npm run
+   test:integration"`, ...) so a red run still says which capability broke.
+   Every capability's steps share that one job rather than each getting its
+   own — GitHub bills per job rounded up to the minute, and a project with
+   several capabilities was paying a full billed minute per capability for
+   work that individually took seconds. Each check-running step after the
+   checkout carries `if: ${{ '{{' }} !cancelled() }}` so one capability's
+   failure doesn't stop the rest from running and reporting — the same "see
+   every broken capability at once" visibility separate jobs gave for free.
+   See docs/decisions.md for the trade-off this makes and why it was taken.
 4. **Its pipeline stages**, if deploying the project needs it to do something.
    A stage is a composite action in
    `template/.github/{{ 'actions' if needs_hosting else '' }}/<stage>/`, called
@@ -425,18 +436,19 @@ stages, which is a real answer, not a missing one). Concretely, to add one:
    like `capacity-gate` provable: a gate whose failing path has never been
    exercised is a gate that has only ever been observed to pass.
 
-Not every job belongs to a capability, though — `ci.yml.jinja` also has
-**ungated jobs owned by the template itself**, for files every project gets
-whatever its capabilities are. `claude-md` (which fails the build while
-`CLAUDE.md` still holds skeleton placeholders) is the one that exists today.
-An ungated job needs that justification: it is for content that renders
-unconditionally, and there is genuinely no flag to gate it on. "I couldn't
-decide which capability owns it" is not that justification.
+Not every step belongs to a capability, though — `ci.yml.jinja`'s `checks` job
+also has **unconditional steps owned by the template itself**, for files every
+project gets whatever its capabilities are. `claude-md` (which fails the build
+while `CLAUDE.md` still holds skeleton placeholders) is the one that exists
+today, and runs first, right after checkout. An unconditional step needs that
+justification: it is for content that renders unconditionally, and there is
+genuinely no flag to gate it on. "I couldn't decide which capability owns it"
+is not that justification.
 
 **Why the four-part rule and not just "files":** the template shipped a
-`frontend/` for months that no CI job ever touched, because nothing forced
-the files and the job to arrive together. Files are the part you notice
-missing; the CI job is the part you don't. Stages are the same shape of
+`frontend/` for months that no CI check ever touched, because nothing forced
+the files and the check to arrive together. Files are the part you notice
+missing; the CI check is the part you don't. Stages are the same shape of
 mistake one layer out — a capability that provisions something and contributes
 nothing to the deploy is one whose infrastructure only exists on the laptop of
 whoever last ran `terraform apply` by hand.
