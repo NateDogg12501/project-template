@@ -14,15 +14,44 @@ provider "aws" {
   region = var.aws_region
 }
 
+# Composed here, not in terraform-modules: the modules take app_name/table_name
+# as plain strings, so per-environment naming belongs to the root config that
+# knows the environment, not to a module that doesn't.
+locals {
+  name_prefix = "{{ project_slug }}-${var.environment}"
+}
+
 module "app" {
   source = "git::https://github.com/NateDogg12501/terraform-modules.git//modules/lambda-web-app?ref=v2.1.0"
 
-  app_name   = "{{ project_slug }}"
+  app_name   = local.name_prefix
   aws_region = var.aws_region
   source_dir = "${path.module}/../dist-lambda"
 
   ssm_secret_env_vars = {
-    # APP_SECRET = "/{{ project_slug }}/app_secret"
+    # The account's one shared login — see STANDARDS.md, "Authentication: one
+    # credential, account-wide". Every hosted project authenticates against
+    # these two and creates no credential of its own; a generated password is a
+    # secret nobody rotates and a login that behaves unlike every other
+    # project's.
+    #
+    # Deliberately not commented out the way SESSION_SECRET is below. These
+    # parameters are written once by the account bootstrap and exist before any
+    # project does, so a plan can always resolve them — including a by-hand
+    # `terraform apply` that never ran a deploy stage. The path is a literal for
+    # the same reason the state bucket is: it is one fixed place per account,
+    # not a per-project answer.
+    AUTH_USERNAME      = "/shared/auth_username"
+    AUTH_PASSWORD_HASH = "/shared/auth_password_hash"
+
+    # The deploy pipeline's `ensure-secrets` stage creates
+    # /{{ project_slug }}/<environment>/session_secret before this applies, and
+    # leaves it alone on every deploy after the first. Uncomment to hand it to
+    # the Lambda — but note that a by-hand `terraform apply` has not run that
+    # stage, so create the parameter yourself first (terraform/README.md) or the
+    # plan fails on a parameter that isn't there. It signs sessions; it does not
+    # grant access, and it is not an alternative to the two above.
+    # SESSION_SECRET = "/{{ project_slug }}/${var.environment}/session_secret"
   }
 
   # The `=` padding is capability-dependent because `terraform fmt -check` is
@@ -47,16 +76,28 @@ module "app" {
 module "table" {
   source = "git::https://github.com/NateDogg12501/terraform-modules.git//modules/dynamodb-single-table?ref=v2.1.0"
 
-  table_name = "{{ project_slug }}-items"
+  table_name = "${local.name_prefix}-items"
   hash_key   = "id"
 
   attributes = [
     { name = "id", type = "S" },
   ]
+
+  # The module defaults to 5/5, which is wrong for this pipeline rather than
+  # wrong in general. DynamoDB's always-free allowance is 25 read and 25 write
+  # units for the whole account and region, and the capacity gate refuses to
+  # deploy past 20 of them. At 5/5 a project costs 10 units across its two
+  # environments, so the third hosted project with a datastore takes the
+  # account over the gate — and because the gate sums tables that already
+  # exist, it is not that project's deploy that fails, it is every deploy
+  # after it, in every project. 1/1 is enough for anything this template is
+  # for; a project that outgrows it should say so here, deliberately.
+  read_capacity  = 1
+  write_capacity = 1
 }
 
 resource "aws_iam_role_policy" "app_table_access" {
-  name = "{{ project_slug }}-table-access"
+  name = "${local.name_prefix}-table-access"
   role = module.app.lambda_role_name
 
   policy = jsonencode({

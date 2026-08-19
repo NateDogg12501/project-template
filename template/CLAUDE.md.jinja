@@ -12,8 +12,8 @@ preset `{{ flavor }}`. Capabilities this project was generated with:
 |---|---|---|
 | API | {% if needs_api %}yes{% else %}no{% endif %} | {% if needs_api %}`backend/` (incl. `backend/test/`), `docker-compose.yml`, `scripts/setup-worktree-env.js`, the `backend` CI job{% else %}— (no server; nothing serves `frontend/`){% endif %} |
 | UI | {% if needs_ui %}yes{% else %}no{% endif %} | {% if needs_ui %}`frontend/` (incl. `frontend/test/`), the `frontend` CI job{% else %}— (API-only project){% endif %} |
-| HOSTED | {% if needs_hosting %}yes{% else %}no{% endif %} | {% if needs_hosting %}`terraform/` (incl. `terraform/bootstrap/`, which creates the S3 state bucket), `backend/scripts/build-lambda.js`, the `terraform` CI job{% else %}— (local-only){% endif %} |
-| DATABASE | {% if needs_datastore %}yes{% else %}no{% endif %} | {% if needs_datastore %}the DynamoDB module + IAM policy in `terraform/`, covered by the `terraform` CI job{% else %}— (no persistent store){% endif %} |
+| HOSTED | {% if needs_hosting %}yes{% else %}no{% endif %} | {% if needs_hosting %}`terraform/` (environment-parameterized, state in the shared bucket every project uses), `backend/scripts/build-lambda.js`, the `terraform` CI job, and the deploy pipeline — `.github/workflows/deploy.yml` plus the `capacity-gate`, `ensure-secrets`, `terraform-apply` and `smoke-test` stages in `.github/actions/`, tested by the `pipeline-stages` CI job{% else %}— (local-only){% endif %} |
+| DATABASE | {% if needs_datastore %}yes{% else %}no{% endif %} | {% if needs_datastore %}the DynamoDB module + IAM policy in `terraform/` (covered by the `terraform` CI job), plus `dynamodb-local` in `docker-compose.yml`, `backend/src/dynamodb.js` + `init-table.js`, and `backend/test/integration/` — its own `datastore` CI job. It also contributes the `seed` deploy stage, which rides `pipeline-stages`{% else %}— (no persistent store){% endif %} |
 
 **Turning a capability on later is a `copier update`, not a hand-build.** Edit
 the flag in `.copier-answers.yml` and re-run `copier update`; the capability's
@@ -34,13 +34,18 @@ most needs to know before touching this repo.]
 docker compose up -d --build           # full app locally
 npm test --prefix backend              # API tests (vitest + supertest)
 {% endif %}
+{% if needs_datastore %}
+docker compose up -d --wait dynamodb-local && AWS_ENDPOINT_URL_DYNAMODB=http://localhost:8000 npm run test:integration --prefix backend  # real read/write against dynamodb-local
+{% endif %}
 {% if needs_ui %}
 npm test --prefix frontend             # UI tests (vitest + jsdom)
 {% endif %}
 {% if needs_hosting %}
-npm run build:lambda --prefix backend  # stage dist-lambda/ for terraform apply
-# Once per project, before the first `terraform init` in terraform/:
-terraform -chdir=terraform/bootstrap init && terraform -chdir=terraform/bootstrap apply
+gh workflow run deploy.yml --field environment=staging  # the normal way to deploy — see docs/deploy.md
+npm test --prefix .github/actions      # deploy stage tests (vitest, no AWS)
+npm run build:lambda --prefix backend  # stage dist-lambda/ for a by-hand terraform apply
+terraform -chdir=terraform init -backend-config="key={{ project_slug }}/staging/terraform.tfstate"
+terraform -chdir=terraform apply -var="environment=staging"  # swap staging for production to target the other env
 {% endif %}
 # [fill in: anything else — dev servers, data loading, one-off scripts]
 ```
@@ -70,12 +75,68 @@ own is not.
 The only carve-out is IAM that joins two modules, and this project has none.
 {% endif %}
 
-State lives in S3 (`terraform/backend.tf`), in the bucket `terraform/bootstrap/`
-creates. **Bootstrap is a separate root config with *local* state, applied once.**
-Don't collapse it into `terraform/` and don't move it onto the backend it
-creates — a config can't keep its state in a bucket it also manages. Its
-`terraform.tfstate` is gitignored; read `terraform/README.md` before deleting it,
-and before any `terraform destroy`, which has an order that matters.
+State lives in S3 (`terraform/backend.tf`), in **one bucket shared across every
+project generated from this template** — not a bucket this project owns.
+`backend.tf`'s `key` is deliberately omitted and supplied at `terraform init
+-backend-config="key={{ project_slug }}/<environment>/terraform.tfstate"`, since
+it's the one thing that varies per apply and backend blocks can't interpolate.
+Isolation from other projects sharing the bucket is this project's deploy role
+being scoped to its own `{{ project_slug }}/*` prefix, not a separate bucket —
+see `terraform/README.md`. Every apply also takes `-var="environment=..."`,
+validated in `variables.tf` against the declared environment list; there's no
+default, so an apply that doesn't say which environment fails immediately
+instead of picking one silently.
+
+### `deploy.yml` sequences stages; the stages hold the logic
+
+`.github/workflows/deploy.yml` is dispatched with an `environment` input and
+does nothing but call composite actions from `.github/actions/` in order. **If
+you find yourself writing more than a few lines of shell in the workflow, it
+belongs in a stage** — that is what keeps each one separately runnable and
+separately testable, and the stage tests are the only place a check like
+`capacity-gate` is ever seen to fail. Full contract in
+[docs/deploy.md](docs/deploy.md).
+
+Three things there are load-bearing and easy to undo by accident:
+
+- **`terraform apply` applies a saved plan file.** A bare `apply` re-plans, so
+  what runs stops being what was reviewed in the log above it.
+- **`deploy-result.json` is uploaded on the failure path too.** It is read by
+  something outside this repository, which is waiting on it either way.
+- **`ensure-secrets` never rotates.** Regenerating `session_secret` on every
+  deploy logs every user out on every ship.
+- **A production deploy refuses the `ref` input, and that check is a security
+  boundary.** Production's OIDC trust policy pins `refs/heads/main`, but it
+  builds that pin from `github.ref` — the ref the run was *dispatched*
+  against — while the `ref` input is read only by `actions/checkout`. Allowing
+  both means dispatching against `main` for the pin and deploying something
+  else, with AWS unable to tell. It looks like an arbitrary restriction on a
+  convenience input; it is the only part of "only main deploys to production"
+  that AWS cannot enforce itself.
+{% if needs_datastore %}
+
+### Staging starts empty, and that is the seed stage working
+
+`seed` refuses to copy anything out of the production table until this project
+provides `scripts/sanitize-seed.js` — the template can't know which attributes
+are personal data, and a seed that guesses is a disclosure. Until that file
+exists the stage warns, writes the reason into the job summary, and lets the
+deploy carry on. **An empty staging table is the expected state of a new
+project, not a bug to chase.** Start from `scripts/sanitize-seed.example.js`.
+{% endif %}
+{% endif %}
+{% if needs_datastore %}
+
+### The local table schema and the Terraform table schema are two definitions of one thing
+
+`backend/src/init-table.js` creates `{{ project_slug }}-items` in DynamoDB
+Local with the same key schema `terraform/main.tf`'s `module "table"` declares
+for real AWS — hash key `id`, string. Nothing keeps these in sync
+automatically: change one and you have to change the other by hand, or local
+and deployed silently diverge. `backend/src/dynamodb.js` is the only file that
+constructs a DynamoDB client — every read and write goes through it, and it
+switches between DynamoDB Local and real AWS on `AWS_ENDPOINT_URL_DYNAMODB`
+alone, so the application code above it never branches on where it's running.
 {% endif %}
 
 ## Testing conventions
@@ -93,11 +154,28 @@ What ships with the scaffold, all of it real and all of it passing:
   `src/app.js`. `src/index.js` is the only place that binds a port, so tests
   build an app without starting a server; keep that split when you add routes.
 {% endif %}
+{% if needs_datastore %}
+
+- `backend/test/integration/` — real read/write assertions against the
+  actual `dynamodb-local` container, not mocks. Excluded from plain `npm
+  test` (see `backend/vitest.config.js`'s `exclude`) because they need the
+  container running; `npm run test:integration` runs them by hand, and the
+  `datastore` CI job runs them after bringing the stack up.
+{% endif %}
 {% if needs_ui %}
 
 - `frontend/test/` — vitest with the jsdom environment, driving the real
   `index.html` rather than a fixture, so a change to the markup that breaks
   `app.js` fails here.
+{% endif %}
+{% if needs_hosting %}
+
+- `.github/actions/*/test/` — the deploy stages, run by the `pipeline-stages`
+  job. Every stage that talks to AWS takes its runner as a parameter
+  (`lib/aws.js`), so pagination, retries and refusals are asserted against
+  recorded calls instead of an account. The one that matters most is
+  `capacity-gate` failing over its threshold: a gate whose failing path has
+  never run is a gate that has only ever been observed to pass.
 {% endif %}
 
 [Expand: what's tested beyond the smoke tests, and what's deliberately not.]

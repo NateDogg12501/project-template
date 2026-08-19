@@ -714,6 +714,551 @@ breaks the CI of every generated project at once. And it is a format check: it
 cannot tell that a pinned module is the *right* module, and it cannot see a
 hand-written resource at all.
 
+## 2026-08-09: kids-ledger named as the flagship project
+**Context:** Four repos work as one system (terraform-modules, project-template,
+idea-workflow, kids-ledger), with patterns tested in one project and then
+promoted into the template for all to inherit. Nothing in the pipeline currently
+says which project is the trial ground, so a future session has no way to know
+that kids-ledger's decisions log carries more weight than any other project's.
+**Decision:** name kids-ledger as the flagship explicitly in STANDARDS.md's new
+"The flagship loop" section. New patterns get trialled there first; its
+`docs/decisions.md` is the evidence layer for a standard.
+**Why not leave it implicit:** explicit naming prevents sessions from treating
+every project's decisions log equally and accidentally promoting one project's
+specific needs into a template rule. The discipline of "trial in kids-ledger
+first, then ask if it generalizes" is only effective if sessions know which
+project is the trial ground.
+**Why not spread trial projects across multiple repos:** concentrating the
+trial work in one place keeps the feedback loop tight and makes pattern-spotting
+easier. Adding a second trial project later, if needed, is a separate decision.
+**Consequence:** kids-ledger's `docs/decisions.md` becomes a loaded document —
+entries there are read as proposals to the standard, not just as project history.
+Future work wiring kids-ledger's decisions into the promotion loop will
+reference this entry as the decision to name it so.
+
+## 2026-08-09: Cross-repo design documents live in project-template/docs/
+**Context:** The four-repo CD pipeline required a design document that spans
+all four projects and belongs to none of them individually. Having no single home
+for such documents meant it either lived in a scratchpad directory (undiscoverable
+by future sessions) or got duplicated across repos (creating maintenance drift).
+**Decision:** `project-template/docs/` is the home for multi-repo design
+documents. project-template is already the root of cross-project truth
+(STANDARDS.md lives here; all projects link to it), so extending it to hold
+cross-repo architectural documents is a natural fit.
+**Why not a separate docs repo:** an extra repo adds a burden on every PR
+that affects multiple repos — coordinating changes across four+ repos plus
+a docs repo, rather than keeping docs and changes in the same place. It also
+makes the relationship between a decision and the docs that record it less
+obvious to someone reading the code later.
+**Why not scatter cross-repo docs in the individual repos:** a document that
+spans four repos has four equally-plausible homes, so sessions would have to
+search all of them to be sure it exists. One canonical home is discoverable.
+**Consequence:** changes to cross-repo design documents land in project-template
+PRs, so STANDARDS.md and `docs/decisions.md` updates travel with them. Each
+repo's CLAUDE.md points to this repo's STANDARDS.md (already the case); a future
+repo that needs to reference the CD pipeline will link to
+`project-template/docs/cd-pipeline.md` from its own CLAUDE.md or README.
+
+## 2026-08-09: DynamoDB Local for the DATABASE capability's local parity; DATABASE earns its own CI job
+**Context:** a generated DATABASE project had no way to run `docker compose up`
+against anything but real AWS DynamoDB — `backend/` had no client-construction
+code at all, so nothing exercised a read/write path without live AWS
+credentials, which made a fresh clone unrunnable and gave CI nothing to test
+data-shaped behaviour against. LocalStack was the obvious first candidate —
+it's what most projects reach for — but its OSS repo was archived on
+2026-03-23 and Community Edition ended: every image now sits behind mandatory
+auth, with core services behind a paid plan. LocalStack ran DynamoDB Local
+underneath for DynamoDB anyway, so going straight to `amazon/dynamodb-local` —
+AWS's own image, free forever, no account, no auth token, no license, no
+commercial-use restriction — is strictly less machinery for the same result.
+**Decision:** added `dynamodb-local` to `docker-compose.yml` (gated on
+`needs_datastore`, healthchecked, `backend` depending on it with
+`condition: service_healthy` so a cold `compose up` can't race it); a single
+client-construction module, `backend/src/dynamodb.js`, that reads
+`AWS_ENDPOINT_URL_DYNAMODB` and is the only file in `backend/src/` allowed to
+construct a DynamoDB client; and a small init step,
+`backend/src/init-table.js`, that recreates the same key schema
+`terraform/main.tf`'s `module "table"` declares, run from `src/index.js` only
+when `AWS_ENDPOINT_URL_DYNAMODB` is set — never against real AWS, which
+Terraform already owns. `dynamodb-local` runs `-inMemory`, so every
+`compose up` is a clean slate and there is no volume to gitignore or seed.
+DATABASE also gets its own `datastore` CI job, which brings the stack up and
+runs a real integration suite (`backend/test/integration/`, its own
+`vitest.integration.config.js`, kept out of plain `npm test` via
+`vitest.config.js`'s `exclude`) — it used to ride HOSTED's `terraform` job
+because Terraform blocks were the only thing it contributed; now it
+contributes runnable code and earns the job the capability contract asks for.
+It still doesn't get its *own* Terraform validation — the `terraform` job
+keeps checking DATABASE's blocks, same as it checks HOSTED's, because both
+live in the one directory that job validates wholesale.
+**Why not LocalStack:** covered above — for this use case it is now a worse,
+extra-auth version of the thing it wraps, not a reason to add a second layer
+over the same DynamoDB Local binary.
+**Why the endpoint switch and not a repository/adapter abstraction:** a
+hand-written data-access layer means local and deployed exercise different
+code, and that is exactly where the bugs that matter hide. One env var read in
+one file keeps the code path byte-identical either way — see STANDARDS.md's
+"Structure".
+**Why the healthcheck doesn't use `curl -f`:** verified against the real
+`amazon/dynamodb-local:latest` image before writing it (Amazon Linux 2023
+base; `curl` is present at `/usr/bin/curl`). A bare `GET /` returns HTTP 400 —
+the image only implements the DynamoDB POST API — and `curl -f` treats any
+4xx as a failure, so a `curl -f`-based healthcheck would never pass even
+though the server is up. `curl -s -o /dev/null http://localhost:8000/`
+without `-f` just confirms the port answers, which is all the healthcheck
+needs to know.
+**Consequence:** `backend/package.json` gains `@aws-sdk/client-dynamodb` and
+`@aws-sdk/lib-dynamodb`; `AWS_ENDPOINT_URL_DYNAMODB` and `DYNAMODB_PORT` join
+`.env.example` (the latter picked up automatically by
+`scripts/setup-worktree-env.js`'s `*_PORT` scan, so concurrent worktrees don't
+collide on the published port). `ci.yml.jinja`'s `terraform` job comment no
+longer claims DATABASE rides it for everything, since that stopped being
+true. A generated project's local table schema (`init-table.js`) and its
+Terraform schema (`terraform/main.tf`) are now two definitions of the same
+thing that must be changed together — named explicitly in the generated
+`CLAUDE.md` rather than hidden, because nothing here keeps them in sync
+automatically.
+
+## 2026-08-10: Environment-parameterized Terraform; one shared state bucket replaces per-project bootstrap
+**Context:** P03 of the four-repo CD pipeline (`docs/cd-pipeline.md` B1/B2).
+Generated `terraform/` had no concept of an environment — resource names were
+single literals — and each project created its own state bucket via
+`terraform/bootstrap/`, a directory whose only job was that bucket. The
+pipeline design settled on two environments per project (`staging`,
+`production`) and one shared state bucket for the whole account, created once
+in an account-level bootstrap outside this template (P02) rather than per
+project.
+**Decision:** added `variable "environment"` (`staging` | `production`, no
+default, validated) to `terraform/variables.tf`, composed at the root config
+into a `locals.name_prefix` used for `module.app`'s `app_name`,
+`module.table`'s `table_name`, and the IAM policy name — not passed into
+`terraform-modules`, which keeps taking plain strings. `terraform/backend.tf`
+became a partial `s3` backend: bucket (`natedogg12501-workflow-tfstate`,
+created by P02) and region are literals, `key` is omitted and supplied at
+`terraform init -backend-config="key=<project_slug>/<environment>/terraform.tfstate"`.
+Removed `state_bucket_name` and its validator from `copier.yml`, and deleted
+`terraform/bootstrap/` entirely — every README/CLAUDE.md reference to it
+rewritten to describe the shared bucket and IAM-prefix isolation instead. The
+`terraform` CI job gained a per-environment `terraform plan` step on pull
+requests, assuming `vars.AWS_ROLE_STAGING` via OIDC.
+**Why the exact bucket name is a literal here rather than a Copier answer:**
+one bucket, named once, ever — the global-namespace uniqueness problem
+`state_bucket_name`'s validator existed to catch is solved a single time, by
+whoever runs the account bootstrap, not by every project's `copier.yml`
+answer. See P02's handback for the bucket name and the account's
+provisioner-role/boundary/OIDC-provider ARNs, which P09 (per-project AWS
+provisioning) consumes.
+**Why `backend.tf`'s `region` is also a hardcoded literal (`us-east-1`)
+instead of rendering the project's own `aws_region` answer:** caught during
+review — the initial version reused `{{ aws_region }}` for both the backend's
+region and the project's own resource region, which was correct before this
+change (the project's own bootstrap created its bucket in that same region)
+but became a bug once the bucket moved to a fixed, externally-managed
+location. A project that picks a non-default `aws_region` for its Lambda
+would otherwise render a backend block pointing at the wrong region for the
+shared bucket, and `terraform init` would fail to find it.
+`copier.yml`'s `aws_region` question and its help text were updated to make
+clear it no longer has anything to do with the state bucket.
+**Why the `terraform` CI job also gained a Lambda build step:** caught during
+review — the new per-environment `terraform plan` step needs `dist-lambda/`
+to exist, since `lambda-web-app`'s `lifecycle.precondition` on
+`terraform_data.lambda_zip` fails during `plan`, not only `apply`, when
+`source_dir` is empty. Added `actions/setup-node@v4` + `npm ci` + `npm run
+build:lambda` (working directory `backend/`) before the plan loop, gated the
+same as the AWS steps so it only runs when a plan will actually happen.
+**Why the staging role plans every environment in CI, not each environment
+its own role:** production's OIDC trust policy (P09) pins
+`ref:refs/heads/main`, which no pull-request branch can ever satisfy — a
+production role literally cannot be assumed from a PR. Using staging's
+broader-trust role to plan against production's backend key is the only way
+a PR gets a real plan for both environments; it is not a permissions
+shortcut, it is the only role a PR is ever able to hold.
+**Why `variable "environment"` has no default:** the whole point of
+separating `staging` and `production` is that an apply says which one it's
+targeting. A default would mean an apply that forgot `-var="environment=..."`
+silently lands somewhere instead of failing immediately — the same reasoning
+`cost_acknowledged` uses for defaulting to `false`, applied to a different
+hazard.
+**Consequence:** a project generated before this change has no `environment`
+variable, a `state_bucket_name` answer in its `.copier-answers.yml` that no
+longer maps to anything in the template, and a `terraform/bootstrap/`
+directory `copier update` will not remove on its own (path-name gating
+prunes files that would otherwise render, not files a project already has on
+disk from a prior render — removing an existing directory is a manual step
+or a `_tasks` entry with `_copier_operation == 'update'`, neither added here
+since no project has gone through this update yet). Migrating an existing
+project — moving its state into the shared bucket, retiring its own bucket,
+threading `environment` through already-applied resource names without
+recreating them — is real work belonging to whichever phase migrates that
+project (`kids-ledger`'s is P10), not something this change does implicitly.
+The exact `terraform init -backend-config` invocation a deploy job must use:
+`terraform init -backend-config="key=<project_slug>/<environment>/terraform.tfstate"`.
+
+## 2026-08-10: The deploy is composed stages now; the stage registry is deferred
+**Context:** P04 had to write `deploy.yml` for hosted projects. The same logic
+could have been one shell script inside the workflow, five composite actions
+called from a thin workflow, or a declarative capability-to-stage registry that
+assembles the workflow from a manifest.
+**Decision:** five composite actions under the HOSTED-gated
+`template/.github/actions/`, called in order by a `deploy.yml` that contains
+sequencing and no logic. **No registry.**
+**Why not one script:** composing costs essentially nothing to do up front, and
+retrofitting it later means rewriting a workflow that by then has real
+behaviour in it. It is also what lets `capacity-gate`'s failing path be tested
+at all — a stage is a unit; a section of a 200-line shell script is not.
+**Why not the registry now:** a manifest saying "DATABASE contributes `seed`"
+plus machinery to assemble a workflow from it is a real extension point with
+exactly one consumer. Designing an extension point against a single example is
+how extension points end up wrong. Stages are *separable* — that property is
+what keeps the door open — but nothing declares them. The second and third
+capability that wants a stage are what should decide the manifest's shape.
+**Consequence:** adding a stage today means adding a directory and a step in
+`deploy.yml`, by hand, in that order. That is deliberate, and it is recorded
+here so a future session reads it as deferred rather than forgotten. If a third
+capability arrives wanting a stage and the `deploy.yml` step list is starting to
+look like data, that is the signal.
+
+## 2026-08-10: Pipeline stages are the fourth thing a capability owns
+**Context:** STANDARDS.md's capability contract was three parts — files, tests,
+a CI job. The deploy pipeline gave capabilities a fourth thing to contribute,
+and nothing said it had to travel with the other three.
+**Decision:** extend the contract to four items and add a "Pipeline stages"
+column to the capability table. HOSTED owns `capacity-gate`, `ensure-secrets`,
+`terraform-apply` and `smoke-test`; DATABASE owns `seed`.
+**Why:** the original three-part rule exists because the template once shipped
+a `frontend/` that no CI job touched — files are the part you notice missing,
+the job is the part you don't. A capability that provisions infrastructure and
+contributes nothing to the deploy is the same mistake one layer out: its
+infrastructure exists only on the laptop of whoever last ran `terraform apply`.
+**Why not leave it implicit:** "a capability owns its stages" is only
+load-bearing if it is written where someone adding a capability will read it.
+**Consequence:** a capability with nothing to do at deploy time now has to say
+so — "—" in the table is an answer, not an omission. API and UI are both that
+case today.
+
+## 2026-08-10: The stage package uses vitest, at the cost of a third npm package
+**Context:** `capacity-gate` needs a test proving it fails over threshold, and
+STANDARDS.md requires one test runner across the stack plus a
+`vitest.config.js` per package. The stages are CI tooling rather than
+application code, and they run on the runner's Node with no install at all.
+**Decision:** `.github/actions/` is its own npm package — `package.json`,
+`vitest.config.js`, one `test/` per stage — with `vitest` as its only
+dependency, a `pipeline-stages` CI job that runs it, and a `copier.yml` task
+that installs it at scaffold time so the lock file is in the first commit.
+**Why not `node --test`:** it is built in and would have cost nothing, but it
+would put a second test runner in a project whose standards say one. A future
+session reading STANDARDS.md would be right to "fix" it, and the deviation
+would have to be re-argued every time. The dependency is a devDependency in a
+directory the application never imports; the deploy path itself stays
+dependency-free, which was the real requirement.
+**Why not fold the tests into `backend/`:** the contract says a capability's
+tests are its own and not folded into another's suite. HOSTED's stages tested
+by API's suite is exactly that.
+**Consequence:** hosted projects carry a third `package-lock.json` and one more
+CI job. `npm test --prefix .github/actions` is part of the scaffold's green
+suite.
+
+## 2026-08-10: `capacity-gate` is gated on HOSTED, not on DATABASE
+**Context:** the stage counts DynamoDB capacity, so DATABASE looks like its
+owner. But it runs on every hosted deploy, including projects with no tables.
+**Decision:** HOSTED owns it, and every hosted deploy runs it.
+**Why:** the allowance it protects is account-wide, and the gate's whole reason
+for existing is that no single project can see the total. Scoping it to
+projects that happen to own a table would mean it only runs where the
+per-module `cost_acknowledged` precondition already runs, which is precisely
+the hole it was written to close.
+**What it costs, named:** a project owning no DynamoDB table can have its
+deploy refused because a *different* project is over the line. That is the
+intended behaviour — the account is the thing being protected, and any deploy
+is an opportunity to notice — but it is a surprising failure to hit, so the
+breakdown names every table holding units and the message says what to do.
+**Consequence:** the deploy role of every hosted project needs
+`dynamodb:ListTables` and `dynamodb:DescribeTable` at account scope, whether or
+not that project uses DynamoDB. Reported to P09.
+
+## 2026-08-10: `seed` refuses to copy anything until a project writes a sanitizer
+**Context:** the seed stage reseeds staging from production. The flagship
+project's production data is children's names and transaction history. The
+template cannot know which attributes are sensitive — that is per-project
+knowledge — so it cannot write the sanitization itself.
+**Decision:** the stage looks for `scripts/sanitize-seed.js` in the project. If
+it is absent, **nothing is read out of the production table at all**: the stage
+warns, writes the refusal to the job summary, sets `seeded=false`, and lets the
+deploy continue. A sanitizer that exists but exports no function *fails*, since
+that is a bug rather than an absence. Both refusals are decided before the
+first Scan, so a project that cannot sanitize never pulls the data out.
+**Why exit 0 rather than failing the deploy:** every freshly scaffolded
+DATABASE project is in this state by construction. Failing would make the first
+staging deploy of every new project red, which trains people to ignore it.
+Staging against an empty table is a working staging; staging holding
+unsanitized production data is a disclosure. The refusal is loud in three
+places instead — annotation, job summary, and stage output.
+**Why not ship a working default sanitizer:** a default that guesses would be
+wrong silently, which is the failure mode the whole stage exists to avoid.
+`scripts/sanitize-seed.example.js` ships instead, and cannot run by accident
+because the stage looks for a different filename.
+**Consequence:** "staging is empty" is a normal state and has to stay
+documented as one, in `docs/deploy.md` and the generated `CLAUDE.md`. Also:
+seeding means the *staging* deploy role can `Scan` the production table. That
+is inherent to seeding from production and is scoped to that one action on that
+one table, but it is a real weakening of the environment boundary and P09 needs
+to know it is deliberate.
+
+## 2026-08-10: Seed items stay in DynamoDB AttributeValue form
+**Context:** a sanitizer would be pleasanter to write against plain JavaScript
+objects (`item.name`) than against `Scan` output (`item.name.S`). Unmarshalling
+would need either an AWS SDK dependency in the deploy path or a hand-written
+converter.
+**Decision:** items are handed to the sanitizer exactly as `Scan` returned them
+and written back exactly as `BatchWriteItem` wants them. No conversion.
+**Why not hand-write a converter:** DynamoDB numbers are arbitrary-precision
+decimal strings. `{ "N": "12345678901234567890" }` through a JavaScript number
+and back is a different value, and silently corrupting data while copying it is
+a worse outcome than an awkward shape — especially in the one code path whose
+job is to be trustworthy with real data. Binary attributes make it worse still.
+**Why not depend on `@aws-sdk/util-dynamodb`:** it would put an `npm ci` in the
+deploy path of every hosted project, for one stage, to save one dereference per
+attribute in one file per project.
+**Consequence:** `scripts/sanitize-seed.example.js` documents the shape, and
+the awkwardness is paid once per project rather than smoothed over by a
+converter nobody would think to test against a twenty-digit number.
+
+## 2026-08-10: A sanitizer that returns the item it was given is refused
+**Context:** the laziest possible sanitizer is `item => item`, and it copies
+production verbatim. Nothing downstream can distinguish it from a real one.
+**Decision:** `sanitizeAll` throws when the sanitizer returns the same object
+identity it was passed, with a message saying to build a new object.
+**Why not allow in-place mutation:** `delete item.child_name; return item` is a
+legitimate implementation and this rejects it, which is a real false positive.
+It is worth it: the cost is a one-line change with the fix stated in the error
+message, and the benefit is that the single most likely wrong implementation of
+a privacy-critical function cannot ship silently.
+**Consequence:** the contract is "return a new item", documented in the example
+sanitizer and in `docs/deploy.md`. Detecting a *semantically* identity-like
+sanitizer would be unsound, so this catches the literal case only and the
+comment says as much rather than implying broader protection.
+
+## 2026-08-10: The deploy result is an uploaded artifact, not job outputs
+**Context:** `idea-workflow` polls a deploy run and needs the deployed URL and
+commit to put in a Jira comment. Job outputs, a run annotation, a commit status
+and an uploaded artifact were all available.
+**Decision:** every run uploads a `deploy-result` artifact containing
+`deploy-result.json` — `{ environment, url, sha, status }` — on the failure
+path as well as the success path.
+**Why not job outputs:** reading a job's outputs back through the REST API is
+awkward — they are not on the run object, you walk jobs and steps — whereas an
+artifact is one download with a stable name and an obvious 404 when absent.
+**Why write it on failure too:** a failed deploy still has to say which
+environment and which commit, or the Jira comment carries nothing useful and a
+human has to open the run anyway.
+**Why `git rev-parse HEAD` and not `github.sha`:** `deploy.yml` takes an
+optional `ref`, and when it is supplied the dispatching sha is not the deployed
+sha. Reporting the wrong commit would be a plausible, silent lie — the
+expensive kind.
+**Consequence:** those four key names are an interface with a repository that
+cannot be grepped from here. `template/docs/deploy.md` is the copy of the
+contract that travels with each generated project, and P08 codes against it.
+Adding a field is additive; renaming one breaks a consumer that is not in this
+repo.
+
+## 2026-08-11: A production deploy refuses the `ref` input
+**Context:** `deploy.yml` takes an optional `ref` so a deploy can build
+something other than the ref it was dispatched against. Separately, B3 of
+`docs/cd-pipeline.md` states that "only main deploys to production" is
+enforced by AWS rather than by YAML: the production role's OIDC trust policy
+pins `repo:<org>/<repo>:ref:refs/heads/main`.
+**Decision:** a production deploy with a non-empty `ref` input fails, in the
+first step, before any role is assumed. Staging is unaffected.
+**Why:** the two features silently cancel each other out. The OIDC subject
+claim is built from `github.ref` — the ref the run was *dispatched* against —
+while the `ref` input is read only by `actions/checkout`. Dispatching against
+`main` satisfies the trust pin and hands over the production role; the input
+then decides what is actually built. AWS sees a compliant run and cannot tell
+the difference, so the guarantee the pin was supposed to make is gone. This
+was found reviewing the P04 diff, not by the pin failing — which is the point:
+it never would have.
+**Why in YAML, when the surrounding argument is that YAML is the weaker
+place to enforce this:** that argument holds for everything AWS *can* see. The
+ref-vs-input gap is the one part it structurally cannot, because both runs look
+identical from outside. A check in YAML is not a duplicate of the AWS pin here;
+it is the only cover for the case the pin misses.
+**Why a flat refusal and not "must be an ancestor of `main`":** ancestry is the
+more permissive rule and would allow redeploying an older `main` commit, but
+rollback is explicitly out of scope (`cd-pipeline.md`, fix forward) and the
+check would need a full-depth checkout to answer. When rollback arrives, this
+is the check to relax rather than delete.
+**Consequence:** the production dispatch is `gh workflow run deploy.yml --ref
+main --field environment=production` — the ref goes on `--ref`, never in
+`--field ref=`. P08's Phase D dispatches exactly that way. Recorded in the
+generated `CLAUDE.md` as an invariant, because the refusal reads like an
+arbitrary limit on a convenience input unless you know what it is covering.
+
+## 2026-08-18: Generated `ci.yml`'s six per-capability jobs consolidated into one `checks` job
+**Context:** P17 (get a clean ticket's Actions bill under 25 billed minutes).
+GitHub bills per job, rounded up to the minute. Generated `ci.yml` had six jobs
+— `claude-md`, `backend`, `frontend`, `terraform`, `pipeline-stages`,
+`datastore` — most finishing in 10-30 seconds each; a real run against
+`kids-ledger` (run `31924535492`) measured 77 seconds of total work across 5
+of those jobs (that project has no `datastore` job — see its own
+`docs/decisions.md`), billed as 5 separate minutes. Run twice per ticket
+(`pull_request` and, until the entry below, `push: main`), that was roughly
+12 billed minutes for under 3 minutes of real work.
+**Decision:** merged all six jobs into one `checks` job, same steps, gated by
+the same `{% if needs_* %}` blocks so a capability that's off still contributes
+nothing. Every check-running step after `actions/checkout@v4` carries
+`if: ${{ '{{' }} !cancelled() }}`, so a failing step doesn't stop the
+remaining steps from running and reporting — otherwise a red PR would show
+only the *first* broken capability instead of every one that's broken, a real
+loss of the diagnostic value six independent jobs gave for free. Step names
+are prefixed by capability (`"terraform: validate"`, `"datastore: npm run
+test:integration"`) so a failure still says which capability broke it.
+`terraform`'s `permissions: id-token: write` (needed for its per-environment
+OIDC plan) moved to the job level — every step in this job comes from this
+file, not from untrusted PR content, so the wider grant costs nothing.
+**Why not path-filtering instead (run each capability's job only when its
+paths changed):** still N jobs and N billed minutes on the (common) PR that
+touches several capabilities at once, and does nothing about the ×2-per-ticket
+multiplier from running on both `pull_request` and `push: main` — see the
+entry below for that half. It also reintroduces exactly the failure mode
+`STANDARDS.md`'s "Enforcement" sections keep warning about: a path filter that
+mismatches a rename is a check that silently stops running, the same shape as
+`npm test --if-present` on a package with no test script.
+**Why not leave the split and just accept the cost:** the six jobs existed
+because `STANDARDS.md`'s capability contract said a capability owns its own CI
+job — but nothing about that job needing to be *separate* from every other
+capability's was ever the point; owning identifiable, gated checks was.
+Sequential steps with per-capability names satisfy the same contract for a
+fraction of the bill.
+**Consequence:** `STANDARDS.md`'s capability contract now describes CI
+*checks* (steps in the shared job), not CI *jobs*; a future capability adds
+steps to `checks`, not a new job. Losing wall-clock parallelism is the
+accepted trade — steps run sequentially inside one job now, so `checks` takes
+longer end-to-end than the slowest of the old six jobs did, but bills less
+either way since GitHub was rounding each of those six up to a full minute
+regardless of how little of it they used.
+
+## 2026-08-18: `push: branches: [main]` dropped from generated `ci.yml`
+**Context:** P17. Generated `ci.yml` triggered on both `pull_request` and
+`push: branches: [main]`. Phase D of the `idea-workflow` pipeline squash-merges
+a pull request only after its `pull_request` CI has already passed and a human
+approved the staging review — so the `push: main` run that followed was
+re-testing a tree whose content had just been tested green minutes earlier,
+roughly doubling the already-consolidated CI cost above for no new signal in
+the common case.
+**Decision:** dropped `push: branches: [main]` from `ci.yml.jinja`, leaving
+`pull_request:` as the only trigger.
+**Why not keep it, given the merge commit isn't literally the PR head:** that
+is the real counterargument — a squash-merge commit's tree could in principle
+differ from what `pull_request` tested, if something else lands on `main`
+between the PR's last green run and the squash-merge. In the pipeline as it
+exists today that window doesn't open: one Jira ticket drives one deploy
+end-to-end, serially, and nothing else merges into a generated project's
+`main` while a ticket is in flight (concurrent feature-ticket builds against
+an existing project are D4's territory, per the "Plan.version: 2" entry above,
+and aren't implemented yet). Verified `deploy.yml` is dispatch-only (no
+`on: push`) and nothing in the `idea-workflow` orchestrator reads or waits on
+a push-triggered CI run, so removing the trigger breaks no other part of the
+pipeline.
+**Why this is an acceptable trade even so:** the rare case where the squashed
+tree genuinely diverges from what was tested is exactly the case `smoke-test`
+and `capacity-gate` exist to catch, downstream, at deploy time against the
+real app — not a case that only a second CI run could catch. Losing the
+CI-on-`main` safety net trades a redundant check in the common case for a
+real gap in a case this pipeline doesn't currently produce.
+**Consequence:** the day this pipeline lets multiple tickets build against the
+same generated project's `main` concurrently (D4), this decision needs
+revisiting — the assumption that a squash-merge's tree always matches what
+`pull_request` tested stops holding once two PRs can be in flight against the
+same repo at once. Until then, `main` on a generated project carries no CI run
+of its own; the last signal on its tip is whatever `pull_request` said about
+the PR that produced it.
+
+## 2026-08-18: Template fixes propagate via a `copier update` script that opens a PR
+**Context:** P12 fixed a bug in `ci.yml.jinja` that broke CI on every hosted
+project from the moment it finished AWS provisioning. The fix merged here and
+reached nothing — `restock-list` kept the broken file, its CI stayed red, the
+merge gate correctly refused, and production was unreachable until someone
+patched it by hand. Nothing in the pipeline could even say *which* projects
+were affected. The machinery to fix this already existed and was unused:
+every generated project commits `.copier-answers.yml`, and `copier update`
+exists precisely for this.
+**Decision:** two scripts, in this order.
+`scripts/template-doctor.js` reports which projects are behind and how many
+of the commits they are missing touch files they do not own; it only reads.
+`scripts/template-update.js` runs `copier update` against one project and
+opens a pull request, resolving conflicts according to the ownership split
+in STANDARDS.md. Neither pushes to `main`; nothing is auto-merged.
+**Why not a Bug ticket per project:** it uses the pipeline as designed and
+gets a real review, but it costs a full build cycle per project per fix, and
+the cost is paid per *fix* rather than per project — a template repo that
+merges ten fixes a month against four projects is forty tickets. It also
+doesn't scale down: propagating a two-line smoke-test fix through a
+plan-approve-build-review cycle is more ceremony than the change is worth.
+Worth keeping for the case where a template change genuinely needs
+project-specific work to land, which `copier update` cannot do by definition.
+**Why not report-only as the endpoint:** report-only was built first and is a
+prerequisite either way — you cannot sensibly update what you cannot
+enumerate — and it alone would have caught P12. But it leaves the actual fix
+to a hand edit, which is what P12 already demonstrated the failure of: the
+hand-patch in `restock-list` was correct and still left three later fixes
+unpropagated. Knowing is necessary and not sufficient.
+**Consequence:** the template's `template/` tree is now a live API with four
+consumers that get patched from it, so a change there is a change to every
+generated project, whether or not anyone runs the update that day.
+`template-doctor.js` exits non-zero when anything is behind, so it can become
+a scheduled check. Wiring it to one is deliberately *not* done here: it needs
+a token with push rights across the projects org, and an unattended job that
+opens PRs against live repositories should be turned on knowingly rather than
+as a side effect of this phase.
+
+## 2026-08-18: Generated-project paths split three ways, not two
+**Context:** `copier update` re-applies template changes as a diff, so it will
+conflict with anything a builder has edited since generation. "Template owns
+the pipeline, project owns the app" is the obvious split and it is not
+sufficient.
+**Decision:** three buckets — template-owned (overwrite), project-owned (never
+touch), shared (surface markers, never resolve automatically) — with
+`.copier-answers.yml` as Copier's own, hand-edited by nobody. Written up in
+STANDARDS.md's "Template ownership"; `scripts/ownership.js` is the executable
+copy.
+**Why not two buckets:** `terraform/main.tf` is the counterexample that forced
+the third. The template lays down the Lambda, the function URL and the table;
+the project then legitimately adds resources to that same file. Calling it
+template-owned would have silently reverted `restock-list`'s uncommented
+`SESSION_SECRET` — the parameter its login signs sessions with — and calling
+it project-owned would freeze every project's Terraform at whatever the
+template said on the day it was generated. Neither is acceptable, so shared
+paths are surfaced for a human and the mechanism refuses to pick a side.
+**Consequence:** `template-update.js` *errors out* rather than proceeding if
+the template wants to change a project-owned path, on the grounds that this
+is a template bug rather than something to resolve in a project's PR. Adding
+a file to `template/` now means deciding which bucket it is in; anything
+unclassified is reported rather than guessed at.
+
+## 2026-08-18: `copier update` runs with LF line endings, or not at all
+**Context:** run on Windows with Git's default `core.autocrlf=true`, the
+first update of `restock-list` produced a single conflict spanning all 495
+lines of `ci.yml`, plus about twenty files marked modified with no content
+change at all.
+**Decision:** the mechanism clones with `core.autocrlf=false`, and discards
+changes that are line-endings-only rather than committing them.
+**Why it happens:** with `autocrlf=true` the working tree is CRLF while the
+committed blobs are LF, so every line of every builder-touched file differs
+from Copier's freshly rendered LF output and the merge degenerates to
+whole-file. Separately, Copier's internal clone of the template inherits the
+same setting, so *static* (non-`.jinja`) files arrive CRLF while Jinja-rendered
+ones arrive LF — hence the phantom modifications. The same update with
+`autocrlf=false` produced one 40-line conflict hunk in the one step that had
+actually been hand-edited.
+**Why not a `.gitattributes` in the template instead:** it would fix new
+projects and do nothing for the four that already exist, which are the ones
+that need propagating. Worth adding later; it is not a substitute for the
+clone flag, since the flag is what makes the update correct on any machine
+regardless of what a project's repo says.
+**Consequence:** a propagation run is only reviewable on a Linux runner or a
+machine with `autocrlf` off. This is the strongest argument for the scheduled
+job eventually running in Actions rather than on someone's laptop.
+
 ## 2026-08-18: "A failed read is not an answer" promoted into STANDARDS.md
 
 **What was chosen:** a normative section saying that a read which *failed* and a

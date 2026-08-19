@@ -58,14 +58,36 @@ between generating it and running it.
 
 ## Pull template updates into an already-generated project
 
-```bash
-cd my-existing-project
-copier update
-```
-
 Copier tracks the answers you gave in `.copier-answers.yml` (dropped into
 every generated repo) and re-applies template changes as a diff, respecting
-whatever you've since changed by hand.
+whatever you've since changed by hand. Two scripts wrap that, and you want
+them in this order.
+
+**Which projects are behind, and does it matter:**
+
+```bash
+node scripts/template-doctor.js --verbose
+```
+
+Read-only, safe against live projects. Reports every generated project's
+template ref and — the part worth reading — how many of the commits it is
+missing touch files it doesn't own. Exits non-zero when anything is behind.
+
+**Propose the update as a pull request:**
+
+```bash
+node scripts/template-update.js <project-name>
+```
+
+Clones the project, runs `copier update`, resolves conflicts according to the
+ownership split in [STANDARDS.md](STANDARDS.md), and opens a PR. It never
+pushes to `main` and never auto-merges. Conflicts in shared paths (notably
+`terraform/`) are left as markers and the PR opens as a draft.
+
+Running bare `copier update` yourself still works, but note two things it
+won't do for you: it has no notion of which files the project owns, and on
+Windows with Git's default `core.autocrlf=true` it degrades to a whole-file
+conflict on every file you've edited. See STANDARDS.md's "Template ownership".
 
 ## Repo layout
 
@@ -73,6 +95,13 @@ whatever you've since changed by hand.
   create`). Not copied into generated projects.
 - `STANDARDS.md` — the durable rules, source of truth, linked (not copied)
   from every generated project's `CLAUDE.md`.
+- `scripts/` — this repo's own tooling, not copied into generated projects:
+  `template-doctor.js` (which projects are behind), `template-update.js`
+  (propose an update as a PR), and `ownership.js`, the executable copy of
+  STANDARDS.md's template-owned/project-owned/shared split that both import.
+- `docs/` — cross-repo design documents and the template's own decisions log.
+  [`cd-pipeline.md`](docs/cd-pipeline.md) is the requirements and phasing
+  guide for the continuous deployment pipeline spanning four repos.
 - `template/` — everything that *is* copied, Jinja2-rendered
   (`_subdirectory: template` in `copier.yml`). `.jinja`-suffixed files are
   rendered; everything else is copied verbatim. **Directory and file names
@@ -111,8 +140,8 @@ Mechanically:
    capability with no tests stayed green for months).
 6. **A capability can also ask its own questions** — any `copier.yml`
    question accepts `when:`, the way `needs_datastore` only asks
-   `when: "{{ needs_hosting }}"`, and HOSTED's `state_bucket_name` /
-   `aws_region` do the same. Two things about a skipped question: it still
+   `when: "{{ needs_hosting }}"`, and HOSTED's `aws_region` does the same.
+   Two things about a skipped question: it still
    resolves to its rendered default, so no template can hit an undefined
    variable — but it gets **no line in `.copier-answers.yml`**. Turning the
    capability on later therefore recomputes those answers from their defaults,

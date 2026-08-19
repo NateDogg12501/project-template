@@ -1,0 +1,47 @@
+// Copy this file to `scripts/sanitize-seed.js` and make it true for
+// {{ project_name }}'s data. Until that file exists, the `seed` deploy stage
+// refuses to copy anything out of `{{ project_slug }}-production-items` and
+// staging runs against an empty table — deliberately. The template cannot know
+// which of this project's attributes are personal data, and a seed that
+// guesses wrong publishes production data into a less-protected environment.
+//
+// The contract
+// ------------
+// Export a default function taking ONE item and returning either a new item to
+// keep, or `null` to drop it entirely. Items arrive in DynamoDB's
+// AttributeValue form, exactly as `Scan` returned them and exactly as
+// `BatchWriteItem` wants them back:
+//
+//     { id: { S: 'abc' }, amount: { N: '12.50' }, tags: { SS: ['x'] } }
+//
+// They are deliberately not unmarshalled into plain JavaScript objects first.
+// Turning `{ N: '12345678901234567890' }` into a JavaScript number loses
+// precision, and losing precision while copying data is a worse failure than
+// an awkward shape.
+//
+// Returning the object you were given is refused by the stage. `item => item`
+// copies production verbatim and nothing can tell it apart from a real
+// sanitizer, so build a new object — `const clean = { ...item }` — and return
+// that. Throwing fails the whole seed rather than skipping the item: a
+// partially sanitized table is indistinguishable from a sanitized one.
+
+const KEEP = ['id']
+
+export default function sanitize(item) {
+    // Anything not named here is dropped rather than carried over. An
+    // allowlist fails safe when a new attribute is added to production — the
+    // opposite of a denylist, which silently starts copying it.
+    const clean = {}
+    for (const attribute of KEEP) {
+        if (item[attribute] !== undefined) clean[attribute] = item[attribute]
+    }
+
+    // Replace, don't remove, anything the application needs present. Real
+    // values must not survive the copy.
+    // clean.display_name = { S: `Example ${item.id?.S ?? 'item'}` }
+
+    // Drop whole records that have no business existing outside production:
+    // if (item.deleted_at) return null
+
+    return clean
+}

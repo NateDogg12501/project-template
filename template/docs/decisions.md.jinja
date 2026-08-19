@@ -19,9 +19,27 @@ Format per entry:
 **Decision:** preset `{{ flavor }}` — capabilities {% if needs_api %}API{% endif %}{% if needs_ui %}{% if needs_api %} + {% endif %}UI{% endif %}{% if needs_hosting %} + HOSTED{% endif %}{% if needs_datastore %} + DATABASE{% endif %}{% if not needs_hosting %} (local-only){% endif %}.
 **Why:** {{ description }}
 {% if needs_hosting %}
-**Consequence:** this project owns an S3 bucket, `{{ state_bucket_name }}` in
-`{{ aws_region }}`, holding its Terraform state — created once by
-`terraform/bootstrap/` and deliberately outliving `terraform destroy`. Inside
-Always Free (SSE-S3, versioned, 90-day noncurrent expiry), so no
-`cost_acknowledged` was needed. See `terraform/README.md`.
+**Consequence:** this project's Terraform state lives in the S3 bucket shared
+across every project generated from this template, keyed
+`{{ project_slug }}/<environment>/terraform.tfstate` — not a bucket this
+project owns or manages. Isolation from other projects in the bucket is this
+project's deploy role, scoped to its own `{{ project_slug }}/*` prefix. See
+`terraform/README.md`.
+**Consequence:** deploys go through `.github/workflows/deploy.yml`, which
+sequences the stages in `.github/actions/` — see `docs/deploy.md`. Any deploy
+step this project needs that the template doesn't have is a new stage there,
+gated on the capability that owns it, with its own test.
+{% endif %}
+{% if needs_datastore %}
+
+## Staging starts with no data
+**Context:** the `seed` deploy stage reseeds staging from production, and this
+project's production data is real.
+**Decision:** it copies nothing until `scripts/sanitize-seed.js` exists here.
+**Why:** the template cannot know which of this project's attributes are
+personal data, so it refuses rather than guessing. Writing that sanitizer —
+and deciding what staging is allowed to know — is a decision this project owes
+its own entry for, above this line, when it makes it.
+**Consequence:** until then an empty staging table is the expected state, not
+a bug. Start from `scripts/sanitize-seed.example.js`.
 {% endif %}

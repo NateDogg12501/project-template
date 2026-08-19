@@ -4,3 +4,4 @@
 node_modules
 test
 vitest.config.js
+vitest.integration.config.js

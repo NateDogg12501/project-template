@@ -1,19 +1,33 @@
-# State lives in S3, in the bucket `bootstrap/` creates. Run that config once
-# before the first `terraform init` here — until then init fails with
-# NoSuchBucket, having changed nothing.
+# State lives in one S3 bucket shared across every project generated from
+# this template — not a bucket this project owns. The bucket is created once,
+# outside this template, in the account-level bootstrap; see STANDARDS.md's
+# "Hosting". Isolation between projects sharing it is IAM, not bucket
+# topology: this project's deploy role is scoped to its own
+# `{{ project_slug }}/*` prefix and nothing wider.
 #
-# Backend blocks cannot interpolate: no `var.`, no locals, no `${}`. So the
-# bucket name and region are literals rendered by Copier from
-# `state_bucket_name` and `aws_region`, the same answers bootstrap/main.tf
-# renders. Changing one means changing both.
+# Backend blocks cannot interpolate: no `var.`, no locals, no `${}`. That
+# used to mean the bucket name was a Copier literal because it was this
+# project's own bucket; now bucket AND region are both constants every
+# project shares, not per-project answers — `region` here is deliberately
+# NOT `{{ aws_region }}` (that variable is this project's own Lambda/resource
+# region, in variables.tf, and can differ from project to project). The
+# bucket lives in one fixed place, set once by whoever ran the account
+# bootstrap, regardless of where any given project deploys its resources —
+# reusing `aws_region` here would silently point the backend at the wrong
+# region for any project that picks a non-default one. `key` is the one
+# thing that legitimately varies — same project, different environment — so
+# it's the one piece a literal can't hold. It's omitted here (a partial
+# backend configuration) and supplied per apply:
 #
-# `use_lockfile` is S3-native state locking — no DynamoDB lock table. It needs
-# Terraform >= 1.10, which main.tf's `required_version` pins.
+#   terraform init -backend-config="key={{ project_slug }}/<environment>/terraform.tfstate"
+#
+# `use_lockfile` is S3-native state locking, per key — no DynamoDB lock table,
+# and no contention between projects or environments sharing the bucket. It
+# needs Terraform >= 1.10, which main.tf's `required_version` pins.
 terraform {
   backend "s3" {
-    bucket       = "{{ state_bucket_name }}"
-    key          = "terraform.tfstate"
-    region       = "{{ aws_region }}"
+    bucket       = "natedogg12501-workflow-tfstate"
+    region       = "us-east-1"
     encrypt      = true
     use_lockfile = true
   }
