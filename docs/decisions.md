@@ -1092,3 +1092,83 @@ main --field environment=production` — the ref goes on `--ref`, never in
 `--field ref=`. P08's Phase D dispatches exactly that way. Recorded in the
 generated `CLAUDE.md` as an invariant, because the refusal reads like an
 arbitrary limit on a convenience input unless you know what it is covering.
+
+## 2026-08-18: Generated `ci.yml`'s six per-capability jobs consolidated into one `checks` job
+**Context:** P17 (get a clean ticket's Actions bill under 25 billed minutes).
+GitHub bills per job, rounded up to the minute. Generated `ci.yml` had six jobs
+— `claude-md`, `backend`, `frontend`, `terraform`, `pipeline-stages`,
+`datastore` — most finishing in 10-30 seconds each; a real run against
+`kids-ledger` (run `31924535492`) measured 77 seconds of total work across 5
+of those jobs (that project has no `datastore` job — see its own
+`docs/decisions.md`), billed as 5 separate minutes. Run twice per ticket
+(`pull_request` and, until the entry below, `push: main`), that was roughly
+12 billed minutes for under 3 minutes of real work.
+**Decision:** merged all six jobs into one `checks` job, same steps, gated by
+the same `{% if needs_* %}` blocks so a capability that's off still contributes
+nothing. Every check-running step after `actions/checkout@v4` carries
+`if: ${{ '{{' }} !cancelled() }}`, so a failing step doesn't stop the
+remaining steps from running and reporting — otherwise a red PR would show
+only the *first* broken capability instead of every one that's broken, a real
+loss of the diagnostic value six independent jobs gave for free. Step names
+are prefixed by capability (`"terraform: validate"`, `"datastore: npm run
+test:integration"`) so a failure still says which capability broke it.
+`terraform`'s `permissions: id-token: write` (needed for its per-environment
+OIDC plan) moved to the job level — every step in this job comes from this
+file, not from untrusted PR content, so the wider grant costs nothing.
+**Why not path-filtering instead (run each capability's job only when its
+paths changed):** still N jobs and N billed minutes on the (common) PR that
+touches several capabilities at once, and does nothing about the ×2-per-ticket
+multiplier from running on both `pull_request` and `push: main` — see the
+entry below for that half. It also reintroduces exactly the failure mode
+`STANDARDS.md`'s "Enforcement" sections keep warning about: a path filter that
+mismatches a rename is a check that silently stops running, the same shape as
+`npm test --if-present` on a package with no test script.
+**Why not leave the split and just accept the cost:** the six jobs existed
+because `STANDARDS.md`'s capability contract said a capability owns its own CI
+job — but nothing about that job needing to be *separate* from every other
+capability's was ever the point; owning identifiable, gated checks was.
+Sequential steps with per-capability names satisfy the same contract for a
+fraction of the bill.
+**Consequence:** `STANDARDS.md`'s capability contract now describes CI
+*checks* (steps in the shared job), not CI *jobs*; a future capability adds
+steps to `checks`, not a new job. Losing wall-clock parallelism is the
+accepted trade — steps run sequentially inside one job now, so `checks` takes
+longer end-to-end than the slowest of the old six jobs did, but bills less
+either way since GitHub was rounding each of those six up to a full minute
+regardless of how little of it they used.
+
+## 2026-08-18: `push: branches: [main]` dropped from generated `ci.yml`
+**Context:** P17. Generated `ci.yml` triggered on both `pull_request` and
+`push: branches: [main]`. Phase D of the `idea-workflow` pipeline squash-merges
+a pull request only after its `pull_request` CI has already passed and a human
+approved the staging review — so the `push: main` run that followed was
+re-testing a tree whose content had just been tested green minutes earlier,
+roughly doubling the already-consolidated CI cost above for no new signal in
+the common case.
+**Decision:** dropped `push: branches: [main]` from `ci.yml.jinja`, leaving
+`pull_request:` as the only trigger.
+**Why not keep it, given the merge commit isn't literally the PR head:** that
+is the real counterargument — a squash-merge commit's tree could in principle
+differ from what `pull_request` tested, if something else lands on `main`
+between the PR's last green run and the squash-merge. In the pipeline as it
+exists today that window doesn't open: one Jira ticket drives one deploy
+end-to-end, serially, and nothing else merges into a generated project's
+`main` while a ticket is in flight (concurrent feature-ticket builds against
+an existing project are D4's territory, per the "Plan.version: 2" entry above,
+and aren't implemented yet). Verified `deploy.yml` is dispatch-only (no
+`on: push`) and nothing in the `idea-workflow` orchestrator reads or waits on
+a push-triggered CI run, so removing the trigger breaks no other part of the
+pipeline.
+**Why this is an acceptable trade even so:** the rare case where the squashed
+tree genuinely diverges from what was tested is exactly the case `smoke-test`
+and `capacity-gate` exist to catch, downstream, at deploy time against the
+real app — not a case that only a second CI run could catch. Losing the
+CI-on-`main` safety net trades a redundant check in the common case for a
+real gap in a case this pipeline doesn't currently produce.
+**Consequence:** the day this pipeline lets multiple tickets build against the
+same generated project's `main` concurrently (D4), this decision needs
+revisiting — the assumption that a squash-merge's tree always matches what
+`pull_request` tested stops holding once two PRs can be in flight against the
+same repo at once. Until then, `main` on a generated project carries no CI run
+of its own; the last signal on its tip is whatever `pull_request` said about
+the PR that produced it.
