@@ -56,6 +56,18 @@ will tell you.
 - **One project pins one tag across its whole config.** Every module `source`
   ends in the same `?ref=vX.Y.Z`, so upgrading is a single decision with a
   single changelog to read rather than a per-module archaeology exercise.
+- **Secrets are resolved at apply time, so rotating one takes two steps.**
+  `lambda-web-app` reads each `ssm_secret_env_vars` parameter with a `data`
+  source and bakes the value into the Lambda's environment; there is no runtime
+  lookup. `aws ssm put-parameter` therefore changes SSM and changes nothing
+  that is deployed, with no error and no warning, until every consuming
+  environment is applied again. Rotating means: set the value, **then redeploy
+  every environment that consumes it**. For anything under `/shared/`, that is
+  every project on the account, and until they all catch up the same credential
+  is accepted by some apps and refused by others. P12 lost a debugging cycle to
+  exactly this. `aws-account`'s `scripts/credential-doctor.js` reports which
+  deployments are behind without printing a secret; its
+  `scripts/rotate-shared-credential.js` does the propagation and verifies it.
 - **State lives in S3, not on a laptop.** `terraform/bootstrap/` is a separate
   root config, with local state, whose only job is creating the state bucket
   with `s3-bucket`; `terraform/` then uses that bucket as an `s3` backend with
