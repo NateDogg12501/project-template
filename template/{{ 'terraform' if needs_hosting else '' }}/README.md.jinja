@@ -77,6 +77,51 @@ CI always runs this. Once this project has been through per-project AWS
 provisioning, CI also plans against both environments' real state on every
 pull request — see `.github/workflows/ci.yml`'s `terraform` job.
 
+## Rotating a secret takes two steps
+
+`lambda-web-app` reads every `ssm_secret_env_vars` parameter at **apply** time
+and bakes the value into the Lambda's environment. **There is no runtime
+lookup.** So:
+
+> `aws ssm put-parameter` changes SSM and changes nothing that is deployed.
+> This app keeps serving the value it was applied with until it is deployed
+> again.
+
+Nothing errors and nothing warns in between, which is what makes it worth a
+section. The symptom is a credential that is correct in SSM and rejected by the
+running app — and, for a parameter shared with other projects, correct in one
+app and rejected in another at the same time.
+
+So rotating a secret is:
+
+1. `aws ssm put-parameter --overwrite` with the new value.
+2. Redeploy **every environment** that consumes it — not just the one you were
+   looking at. `gh workflow run deploy.yml --field environment=staging`, then
+   the same for `production`.
+
+To check whether what is deployed matches SSM, without printing either:
+
+```bash
+aws lambda get-function-configuration --function-name {{ project_slug }}-staging --query 'Environment.Variables.SESSION_SECRET' --output text > /tmp/a
+aws ssm get-parameter --name /{{ project_slug }}/staging/session_secret --with-decryption --query 'Parameter.Value' --output text > /tmp/b
+cmp -s /tmp/a /tmp/b && echo current || echo STALE; rm -f /tmp/a /tmp/b
+```
+
+Account-wide, across every project and environment at once, `aws-account` has
+`scripts/credential-doctor.js`, which does the same comparison by SSM version
+number and writes nothing to disk.
+
+**`/shared/auth_username` and `/shared/auth_password_hash` are worse than they
+look**, because they are shared with every other project on the account.
+Rotating one leaves every *other* project serving the old value until each of
+them redeploys too, so the account runs a mix until they all catch up — a
+correct password accepted by some apps and refused by others. `aws-account`'s
+`scripts/rotate-shared-credential.js` does that propagation and verifies it.
+
+`session_secret` is per-project-per-environment, so its blast radius is this
+project alone — but the mechanism is identical, and rotating it logs everyone
+out of that environment, which is usually the point.
+
 ## State
 
 State for each environment is at
