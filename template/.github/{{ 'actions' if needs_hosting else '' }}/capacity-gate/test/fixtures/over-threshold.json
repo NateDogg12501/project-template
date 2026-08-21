@@ -1,0 +1,35 @@
+[
+  {
+    "Table": {
+      "TableName": "kids-ledger-production-items",
+      "BillingModeSummary": { "BillingMode": "PROVISIONED" },
+      "ProvisionedThroughput": { "ReadCapacityUnits": 5, "WriteCapacityUnits": 5 },
+      "GlobalSecondaryIndexes": [
+        {
+          "IndexName": "by-date",
+          "ProvisionedThroughput": { "ReadCapacityUnits": 5, "WriteCapacityUnits": 5 }
+        }
+      ]
+    }
+  },
+  {
+    "Table": {
+      "TableName": "recipe-box-production-items",
+      "ProvisionedThroughput": { "ReadCapacityUnits": 8, "WriteCapacityUnits": 8 }
+    }
+  },
+  {
+    "Table": {
+      "TableName": "notes-staging-items",
+      "BillingModeSummary": { "BillingMode": "PAY_PER_REQUEST" },
+      "ProvisionedThroughput": { "ReadCapacityUnits": 0, "WriteCapacityUnits": 0 }
+    }
+  },
+  {
+    "Table": {
+      "TableName": "kids-ledger-staging-items",
+      "BillingModeSummary": { "BillingMode": "PROVISIONED" },
+      "ProvisionedThroughput": { "ReadCapacityUnits": 4, "WriteCapacityUnits": 4 }
+    }
+  }
+]

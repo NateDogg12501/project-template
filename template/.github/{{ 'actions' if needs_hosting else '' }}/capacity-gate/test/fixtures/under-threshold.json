@@ -1,0 +1,16 @@
+[
+  {
+    "Table": {
+      "TableName": "kids-ledger-production-items",
+      "BillingModeSummary": { "BillingMode": "PROVISIONED" },
+      "ProvisionedThroughput": { "ReadCapacityUnits": 5, "WriteCapacityUnits": 5 }
+    }
+  },
+  {
+    "Table": {
+      "TableName": "notes-staging-items",
+      "BillingModeSummary": { "BillingMode": "PAY_PER_REQUEST" },
+      "ProvisionedThroughput": { "ReadCapacityUnits": 0, "WriteCapacityUnits": 0 }
+    }
+  }
+]

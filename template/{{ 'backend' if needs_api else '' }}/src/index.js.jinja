@@ -1,9 +1,23 @@
 // Entry point: the only place that binds a port. The app itself lives in
 // src/app.js so tests can build one without starting a server.
 import { createApp } from './app.js'
+{% if needs_datastore %}
+import { endpoint } from './dynamodb.js'
+import { ensureTableExists } from './init-table.js'
+{% endif %}
 
 const port = process.env.PORT || 3000
 
+{% if needs_datastore %}
+// Only against dynamodb-local (`endpoint` comes from dynamodb.js, the one
+// place that reads AWS_ENDPOINT_URL_DYNAMODB, so this stays in sync with
+// however that module ends up deciding "are we local"). Terraform already
+// created this table in real AWS — running this there too would mean a
+// second place trying to own the schema. See init-table.js.
+if (endpoint) {
+    await ensureTableExists()
+}
+{% endif %}
 createApp().listen(port, () => {
     console.log(`{{ project_name }} backend listening on :${port}`)
 })

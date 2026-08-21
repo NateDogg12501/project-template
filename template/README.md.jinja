@@ -38,22 +38,34 @@ Deployed to AWS Lambda (Function URL, no API Gateway/ALB) behind the
 [`lambda-web-app`](https://github.com/NateDogg12501/terraform-modules/tree/main/modules/lambda-web-app)
 Terraform module{% if needs_datastore %}, with data in DynamoDB via
 [`dynamodb-single-table`](https://github.com/NateDogg12501/terraform-modules/tree/main/modules/dynamodb-single-table){% endif %},
-and Terraform state in S3 via
-[`s3-bucket`](https://github.com/NateDogg12501/terraform-modules/tree/main/modules/s3-bucket).
-Stays inside AWS Always Free.
+with Terraform state in the S3 bucket shared across every project generated
+from this template. Stays inside AWS Always Free.
+
+Deploys run in GitHub Actions, over OIDC — there are no AWS keys in this
+repository:
 
 ```bash
-cd terraform/bootstrap    # once per project: creates the S3 state bucket
-terraform init && terraform apply
-
-cd .. && terraform init   # against that bucket
-terraform apply
+gh workflow run deploy.yml --field environment=staging
 ```
 
-The first two lines are once per project, not once per deploy — after that,
-deploying is `terraform apply` in `terraform/`. See `terraform/README.md` for the
-SSM parameters needed before the first apply, and for what to do if `terraform
-init` says `NoSuchBucket`.
+`.github/workflows/deploy.yml` checks account-wide DynamoDB capacity, creates
+this environment's session secret if it is missing, applies Terraform,{% if needs_datastore %}
+reseeds the staging table from sanitized production data,{% endif %} and fails the run if
+the deployed URL doesn't answer. Every run uploads a `deploy-result` artifact
+saying what was deployed and where. See [`docs/deploy.md`](docs/deploy.md).
+
+To apply by hand instead — for a first look, or when Actions is not an option:
+
+```bash
+npm run build:lambda --prefix backend
+cd terraform
+terraform init -backend-config="key={{ project_slug }}/staging/terraform.tfstate"
+terraform apply -var="environment=staging"
+```
+
+Swap `staging` for `production` to target the other environment — same
+config, different backend key and `-var`. See `terraform/README.md` for the
+SSM parameters needed before the first apply.
 {% else -%}
 ## Deployment
 

@@ -1,0 +1,77 @@
+name: Terraform apply
+description: >-
+  Initialises the shared S3 backend against this environment's state key, plans
+  to a file, and applies that file. Never a bare `terraform apply`: what runs
+  is what was planned, and the plan is in the log above it.
+
+inputs:
+  environment:
+    description: Environment being deployed. Passed as -var="environment=..." and validated by variables.tf.
+    required: true
+  state-key:
+    description: >-
+      Backend key for this project and environment, e.g.
+      my-project/staging/terraform.tfstate. backend.tf deliberately omits it —
+      backend blocks cannot interpolate, and the key is the one part that
+      varies per apply.
+    required: true
+  working-directory:
+    description: Directory holding the root Terraform config.
+    required: false
+    default: terraform
+
+outputs:
+  function-url:
+    description: The deployed Lambda Function URL, read back from terraform output.
+    value: ${{ steps.read-outputs.outputs.function-url }}
+
+runs:
+  using: composite
+  steps:
+    # Inside the stage rather than in deploy.yml, so the stage is runnable on
+    # its own — which is the whole reason these are composite actions.
+    - uses: hashicorp/setup-terraform@v3
+      with:
+        # The wrapper rewrites stdout to publish it as a step output, which
+        # corrupts `terraform output -raw` for the step below.
+        terraform_wrapper: false
+
+    # -reconfigure, not plain init: a working directory already initialised
+    # against another environment's key would otherwise silently reuse it and
+    # apply staging's plan over production's state.
+    - name: Init against this environment's state
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        STATE_KEY: ${{ inputs.state-key }}
+      run: terraform init -input=false -reconfigure -backend-config="key=$STATE_KEY"
+
+    - name: Plan
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        ENVIRONMENT: ${{ inputs.environment }}
+      run: terraform plan -input=false -out=tfplan -var="environment=$ENVIRONMENT"
+
+    # The saved plan carries the environment with it, so no -var here: a
+    # mismatch between what was planned and what is applied is not expressible.
+    - name: Apply the saved plan
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: terraform apply -input=false tfplan
+
+    - name: Read the deployed URL
+      id: read-outputs
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: echo "function-url=$(terraform output -raw lambda_function_url)" >> "$GITHUB_OUTPUT"
+
+    # The plan file is a full description of the infrastructure, including
+    # values Terraform would otherwise mark sensitive in its own output. It has
+    # done its job by here and there is no reason for it to survive into any
+    # later step or artifact.
+    - name: Discard the plan file
+      if: always()
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: rm -f tfplan

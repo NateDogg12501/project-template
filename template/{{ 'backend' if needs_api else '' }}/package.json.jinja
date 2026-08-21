@@ -8,11 +8,14 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "test": "vitest run",
-    "test:watch": "vitest"{% if needs_hosting %},
+    "test:watch": "vitest"{% if needs_datastore %},
+    "test:integration": "vitest run --config vitest.integration.config.js"{% endif %}{% if needs_hosting %},
     "build:lambda": "node scripts/build-lambda.js"{% endif +%}
   },
   "dependencies": {
-    "express": "^4.19.2"
+    "express": "^4.19.2"{% if needs_datastore %},
+    "@aws-sdk/client-dynamodb": "^3.1106.0",
+    "@aws-sdk/lib-dynamodb": "^3.1106.0"{% endif +%}
   },
   "devDependencies": {
     "supertest": "^7.2.2",
